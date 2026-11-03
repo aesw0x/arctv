@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<widget xmlns="http://www.w3.org/ns/widgets"
+        xmlns:tizen="http://tizen.org/ns/widgets"
+        id="http://arctv.local/"
+        version="0.1.0"
+        viewmodes="maximized">
+
+    <tizen:application id="ArcTVTizen.ArcTV" package="ArcTVTizen" required_version="6.0"/>
+
+    <content src="index.html"/>
+    <name>ArcTV</name>
+    <description>Your Telegram library, on the television.</description>
+    <icon src="icon.png"/>
+
+    <tizen:profile name="tv-samsung"/>
+
+    <!-- The only privilege this app needs: it talks to the phone over the LAN. -->
+    <tizen:privilege name="http://tizen.org/privilege/internet"/>
+
+    <!-- The phone's address is only known at runtime, so the app cannot whitelist a host. -->
+    <access origin="*" subdomains="true"/>
+
+    <tizen:setting screen-orientation="landscape"
+                   context-menu="disable"
+                   background-support="disable"
+                   encryption="disable"
+                   install-location="auto"
+                   hwkey-event="enable"/>
+</widget>
