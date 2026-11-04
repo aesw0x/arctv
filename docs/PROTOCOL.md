@@ -85,7 +85,10 @@ Unauthenticated.
 }
 ```
 
-`pairing`: `open` (accepting requests), `locked` (a TV is already paired), `disabled`.
+`pairing` is the one field a TV must not build logic around: a phone answers `open` today
+whether or not a TV is already paired, because more than one TV may hold a token. `locked` and
+`disabled` are reserved, not sent — nothing bound to a port can answer `disabled`, and a phone
+that stopped serving simply stops answering.
 
 `Access-Control-Allow-Origin: *`.
 
@@ -206,19 +209,24 @@ it is a shortcut for people who would rather scan than click. The TV must work w
   "generatedAt": 1761955200000,
   "items": [
     {
-      "id": -1001234567890,
+      "id": "-3217499465312568008",
+      "fileName": "Blade.Runner.2049.2017.2160p.HDR10.x265.DTS-HD.MA.5.1-ETHEL.mkv",
       "title": "Blade Runner 2049",
-      "chatTitle": "Movies",
+      "subtitle": null,
+      "year": 2017,
+      "overview": "A young blade runner unearths a long-buried secret.",
+      "genres": ["Sci-Fi", "Drama", "Mystery"],
+      "posterUrl": "/artwork/-3217499465312568008/poster?k=9f3a...c1",
+      "backdropUrl": "/artwork/-3217499465312568008/backdrop?k=9f3a...c1",
       "sizeBytes": 2147483648,
       "durationMs": 9780000,
       "width": 1920,
       "height": 1080,
       "mimeType": "video/x-matroska",
-      "posterUrl": "/api/poster/-1001234567890?k=9f3a...c1",
-      "needsRemux": false,
-      "audioCodec": "eac3",
       "resumeMs": 4215000,
-      "bitrateMbps": 1.76
+      "bitrateMbps": 1.76,
+      "audioCodec": "dts-hd",
+      "needsRemux": true
     }
   ]
 }
@@ -226,18 +234,30 @@ it is a shortcut for people who would rather scan than click. The TV must work w
 
 | Field | Notes |
 |---|---|
-| `id` | Negative `stableId`, same key as Arc Player's local maps |
+| `id` | Negative `stableId` as a **string**. A JavaScript `Number` rounds anything past 2^53, and a rounded id is a 404 no log on the phone explains. Send it quoted. |
+| `fileName` | The copy's own name on the phone. `audioCodec` is read out of it, so this is the one field that lets a viewer check a badge |
+| `title` | Matched catalogue title when the phone has one, else the cleaned file name |
+| `subtitle` | The line under the title: `"S02 · Episode 3"` for an episode, the year for a film, `null` when the phone never matched it |
+| `year`, `overview`, `genres` | From the same catalogue match; empty or `null` when the phone never matched the file |
 | `sizeBytes` | **Full** file size — the client relies on it for seeking |
-| `needsRemux` | `true` when audio is DTS/TrueHD (§6.6 of the plan) |
-| `audioCodec` | Short name for the badge |
-| `resumeMs` | From `resume_positions`; `0` if unwatched |
-| `bitrateMbps` | `sizeBytes * 8 / durationMs / 1000` — drives the warning |
+| `audioCodec` | Lowercase short name — `dts-hd`, `truehd`, `eac3`, `ac3`, `flac`, `opus`, `aac`, `mp3` — or `null` when the file name says nothing. Never a guess |
+| `needsRemux` | `true` only when *none* of the tracks the name claims can be decoded by this TV. A `…DTS.AC3…` dual-audio rip is `false`: the panel switches to the track it can hear |
+| `resumeMs` | Where the phone left this film, from the same store its own UI reads; `0` if unwatched |
+| `bitrateMbps` | `sizeBytes * 8 / durationMs / 1000` — always a number, `0` when the length is unknown |
+| `posterUrl`, `backdropUrl` | Either may be `null`; the TV falls back to a title card |
 
 `Access-Control-Allow-Origin: *`.
 
-### 4.2 `GET /api/poster/{id}?k=TOKEN`
+Only films whose every byte is already on the phone appear. A copy the viewer has not kept is a
+streaming job, not a library entry, and the phone will not start one for a TV it is not playing.
 
-`image/jpeg`, cached thumbnail. `404` → the TV draws a title card.
+### 4.2 `GET /artwork/{id}/{kind}?k=TOKEN`
+
+`kind` is `poster` or `backdrop`; anything else, and any id the phone does not hold, is `404`.
+The bytes are whatever the phone cached from the catalogue — a JPEG or a PNG, so the
+`Content-Type` says which. `404` → the TV draws a title card.
+
+There is no `/api/poster/{id}`; an app written against that path gets a 404 for every film.
 
 ---
 
@@ -253,7 +273,9 @@ Accept-Ranges: bytes
 Cache-Control: no-store
 ```
 
-`Content-Length` is the **full Telegram file size**, not the on-disk size.
+`Content-Length` is the byte count the file has on the phone's disk. The library only ever offers
+complete copies, so that figure is also the film's full size; the two would part company only on
+the growing-file path, which is not built (§5.2).
 
 ### 5.2 `GET /stream/{id}?k=TOKEN`
 
@@ -275,13 +297,23 @@ Accept-Ranges: bytes
 Cache-Control: no-store
 ```
 
-**Body semantics**
+**Body semantics — built**
+
+The phone opens the file, takes its `length()` as the total, and answers the range against the
+bytes that exist. A read past the end returns nothing. Nothing in this path waits, because the
+library only offers copies that are already complete on disk.
+
+**Body semantics — the growing-file design, not built**
 
 - Bytes are written **as they land on disk**; `read()` blocks otherwise.
 - The connection stays open through a stall.
 - Bytes are never fabricated. If a gap never fills, the socket closes early.
 
 #### 5.2.1 Timeouts
+
+Not built. These three timers belong to the growing-file path above; against a complete file no
+read can starve, and none of them has fired. They are here so the phone and TV agree on what a
+stall will mean when §9's second item is implemented.
 
 | Timer | Value | On expiry |
 |---|---|---|
@@ -297,12 +329,21 @@ Cache-Control: no-store
 
 #### 5.2.3 Pre-buffer
 
+Not built — no request waits for bytes today, so there is nothing to buffer before answering.
+These are the targets for the growing-file path:
+
 Request starting at 0 → `min(4 MB, 3 s)` contiguous.
 Seek (start > 0) → `min(512 KB, 3 s)`.
 
 ### 5.3 `GET /api/subtitles/{id}?k=TOKEN`
 
-SRT as `text/plain; charset=utf-8`, or `404`. Fed to `setExternalSubtitlePath()`.
+SRT as `text/plain; charset=utf-8`, or `404`. The TV saves the body and hands the local path to
+`setExternalSubtitlePath()`.
+
+`404` is the common answer, and it is not a failure: the phone serves a caption only when its own
+player already cached one to disk. A TV request never wakes Telegram — the films it plays are read
+from disk, and the one download window belongs to whatever keep the viewer actually started. A film
+watched on the phone with captions has them on the TV; a film never opened has none.
 
 ---
 
@@ -311,16 +352,38 @@ SRT as `text/plain; charset=utf-8`, or `404`. Fed to `setExternalSubtitlePath()`
 ### 6.1 `GET /api/progress?k=TOKEN`
 
 ```json
-{ "positions": { "-1001234567890": 4215000 } }
+{ "positions": { "-3217499465312568008": 4215000 } }
 ```
+
+Every film on this phone with a place left in it, in one round trip — which is what a TV wants
+when it decides what to put first. Keys are strings for the same reason ids are: a 64-bit number
+read through JavaScript rounds to the nearest multiple of two, and two films would share one
+bookmark.
+
+`/api/library` already carries each film's own `resumeMs`; this is the whole shelf at once.
 
 ### 6.2 `POST /api/progress?k=TOKEN`
 
 ```json
-{ "id": -1001234567890, "positionMs": 4215000 }
+{ "id": "-3217499465312568008", "positionMs": 4215000, "durationMs": 9780000 }
 ```
 
-`204 No Content`. The phone debounces writes to `resume_positions` (max 1 write / 5 s per id).
+`204 No Content` when accepted, `400` when the body is not an object, carries no position, or carries
+an id that is not a number, and `404` when the phone is not holding that film — a place kept for a
+file the viewer cannot open is a ghost in Continue Watching. A `204` means the write was accepted,
+not that a position now exists: a tail position is accepted and then forgotten.
+
+Send `durationMs`. The phone prefers its own measurement of the film and uses the reported one
+only when it has never opened the file, but either way the length is what tells the phone whether
+`4215000` is a pause or an ending: a position inside the last min(8 %, 90 s) is not stored at all
+— it removes the entry instead, so a viewer who sat through the credits finds the film finished at
+home rather than offered "Resume at 1:58:04". A film shorter than 30 s is treated the same way, and
+a position under 3 s leaves whatever is already stored alone — three seconds in is not a place worth
+replacing one with.
+
+There is no phone-side debounce, deliberately. The TV posts only once the play head has travelled
+5 s, and a timer on the phone would swallow the writes that matter most — a forced seek, and the
+final position when the viewer stops.
 
 ---
 
@@ -329,10 +392,11 @@ SRT as `text/plain; charset=utf-8`, or `404`. Fed to `setExternalSubtitlePath()`
 | Code | Where | Meaning | TV behaviour |
 |---|---|---|---|
 | `AUTH` | 401 | Bad/missing token | Return to pairing |
-| `NOTFOUND` | 404 | Unknown id | Skip item, toast |
+| `NOTFOUND` | 404 | Unknown id, no artwork, no cached caption | Skip item, toast |
+| `BAD` | 400 | A POST body the phone cannot read | Drop the write; it is best effort |
 | `RANGE` | 416 | Unsatisfiable range | Re-request from 0 |
 | `BUSY` | 503 | Connection cap | Retry after 1 s |
-| `NOAUDIO` | library | DTS/TrueHD track | "Prepare for TV" button |
+| `NOAUDIO` | library | Only DTS/TrueHD audio | Warning badge, and a plain-text notice on the film page |
 | `DECODE` | player | AVPlay rejected the stream | Show codec hint |
 | `NETWORK` | player | Socket/HTTP failure | Retry once, then error |
 | `STALL` | player | Hard stall | Offer "restart from here" |
@@ -346,10 +410,9 @@ SRT as `text/plain; charset=utf-8`, or `404`. Fed to `setExternalSubtitlePath()`
 ```
 TV    → sweep the common /24s :8080 /api/ping
 TV    ← {"service":"arcplayer","device":"Pixel 8","pairing":"open"}
-TV    → POST /api/pair/request  {"tvModel":"UA55AU7100"}
+TV    → POST /api/pair/request  {"tvModel":"UA55AU7100","tvName":"Living Room"}
 TV    ← {"code":"7F2K9Q","expiresAt":1761955320000}
-TV    → renders QR: arctv://pair?v=1&h=192.168.0.42&p=8080&c=7F2K9Q&n=Pixel%208
-PHONE → scans, confirms, approves in-process
+PHONE → shows "Living Room wants to browse your library" — Allow / Deny
 TV    → GET /api/pair/status?c=7F2K9Q      (every 2 s)
 TV    ← {"state":"approved","token":"9f3a...c1"}
 TV    → GET /api/library?k=9f3a...c1
@@ -358,20 +421,23 @@ TV    → GET /api/library?k=9f3a...c1
 ### 8.2 Play
 
 ```
-TV → HEAD /stream/-1001234567890?k=...        → 200, Length=2147483648
-TV → GET  /stream/-1001234567890?k=...  Range: bytes=0-
-SRV → advanceWindow(video, 0)
-SRV → 206, pre-buffers 4 MB, then streams
+TV  → HEAD /stream/-3217499465312568008?k=...   → 200, Length=2147483648
+TV  → GET  /stream/-3217499465312568008?k=...   Range: bytes=0-
+SRV → 206, whole file on disk, streams from offset 0
 ```
 
 ### 8.3 Seek
 
 ```
 TV  → avplay.seekTo(8000000)
-TV  → closes old connection, opens GET Range: bytes=<~1.7GB>-
-SRV → cancels previous stream, advanceWindow(video, 1750000000)
-SRV → 206, blocks until that offset is on disk
+TV  → closes the old connection, opens GET Range: bytes=<~1.76 GB>-
+SRV → closes the superseded stream, 206 from that offset at once
 ```
+
+A film the phone is serving is complete on disk, so a seek needs no network and lands
+immediately. Serving a copy that is still downloading is the unbuilt half, and it is the case
+that would need `advanceWindow(video, offset)` before writing, a 250 ms debounce on those calls,
+and a block until the byte exists.
 
 ### 8.4 Stall
 
@@ -381,10 +447,16 @@ TV  → avplay onerror → overlay "Stalled — retry"
 TV  → user taps retry → GET Range from last known position
 ```
 
+The 45 s watchdog is written on both sides and has never fired against a complete file, because
+nothing in that path can starve. It is what a partially-downloaded film will use.
+
 ---
 
 ## 9. Deferred to v1.1
 
-A WebSocket at `/control` for phone-as-remote and live status. Not needed for v1 — the TV
-remote is the input device, and progress syncs over plain HTTP (§6). Left out to keep the
-first version small.
+- A WebSocket at `/control` for phone-as-remote and live status. Not needed for v1 — the TV
+  remote is the input device, and progress syncs over plain HTTP (§6).
+- Streaming a copy that is still downloading, with the Telegram read-window moves §8.3 describes.
+  Until then a film appears in the library only once a keep has finished it.
+- Preparing an unsupported audio track for the TV. The phone detects DTS and TrueHD by file name
+  and warns; it does not re-encode, and no route converts anything.

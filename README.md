@@ -180,11 +180,14 @@ docs/
 - [x] Discovery, device list, phone-approved pairing
 - [x] Library — featured hero, poster rail, D-pad focus engine
 - [x] Player — AVPlay on the panel, `<video>` in a browser, full transport controls
-- [ ] Audio track and subtitle selection, bitrate warning
+- [ ] Audio track and subtitle selection, bitrate warning — written, and proven in a browser;
+      the panel has not been reachable since, so nothing has been seen on the TV itself
 - [ ] Hardening: reconnects, partial files, hostile payloads
 - [x] Packaged and sideloaded (`ArcTVTizen.ArcTV`)
-- [ ] Phone: `/api/progress` and `/api/subtitles` — the TV already calls them; the routes do not exist yet
-- [ ] Phone: DTS → AC-3 conversion
+- [x] Phone: `/api/progress` and `/api/subtitles` — both routes exist on the phone and were
+      checked with curl against a debug build on 2026-11-03
+- [x] Phone: unsupported audio detected by file name (`audioCodec`, `needsRemux`) and warned about
+- [ ] Phone: DTS / TrueHD → AC-3 conversion. Nothing converts; §9 of `docs/PROTOCOL.md`
 
 ## Licence
 
