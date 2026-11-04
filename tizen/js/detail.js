@@ -91,8 +91,10 @@
 
         if (item.needsRemux) {
             info.appendChild(UI.el('div', 'detail-warning',
-                'This film has ' + String(item.audioCodec || 'DTS').toUpperCase() +
-                ' audio, which this TV cannot decode. Arc Player on your phone can convert it before playback.'));
+                'This film carries ' + String(item.audioCodec || 'DTS').toUpperCase() +
+                ' audio, which this TV cannot decode. The picture always plays, but you may hear' +
+                ' nothing unless the file also holds an AC-3 or AAC track. Re-encode the audio to' +
+                ' AAC on a computer to fix it.'));
         }
 
         var play = UI.el('button', 'button button-primary',

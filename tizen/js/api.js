@@ -278,10 +278,17 @@
             '?k=' + encodeURIComponent(token);
     }
 
-    function postProgress(host, id, positionMs) {
+    /**
+     * The phone only stores a position it can trust, so the total length travels with it: without
+     * durationMs the phone cannot tell "48 minutes into a 2 hour film" from "48 minutes into a
+     * 50 minute film", which is the difference between a resume point and a false "finished".
+     */
+    function postProgress(host, id, positionMs, durationMs) {
+        var body = { id: id, positionMs: Math.round(positionMs) };
+        if (durationMs > 0) { body.durationMs = Math.round(durationMs); }
         return requestJson(host, '/api/progress', {
             method: 'POST',
-            body: { id: id, positionMs: Math.round(positionMs) }
+            body: body
         }).catch(function () { /* progress is best effort */ });
     }
 

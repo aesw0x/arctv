@@ -134,7 +134,8 @@
         art.appendChild(UI.el('div', 'card-shade'));
 
         if (item.needsRemux) {
-            art.appendChild(UI.el('span', 'chip chip-warn', 'DTS'));
+            art.appendChild(UI.el('span', 'chip chip-warn',
+                String(item.audioCodec || 'DTS').toUpperCase()));
         }
 
         if (item.resumeMs > 0 && item.durationMs > 0) {

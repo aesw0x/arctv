@@ -583,7 +583,7 @@
         if (pos < 1000) { return; }
         if (!force && lastReported >= 0 && Math.abs(pos - lastReported) < 5000) { return; }
         lastReported = pos;
-        ArcTV.postProgress(ctx.host, ctx.item.id, pos);
+        ArcTV.postProgress(ctx.host, ctx.item.id, pos, duration() || ctx.item.durationMs || 0);
     }
 
     function closeSilently() {
