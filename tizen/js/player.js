@@ -439,7 +439,7 @@
         posEl.textContent = '0:00';
         durEl.textContent = '0:00';
         fillEl.style.width = '0%';
-        setHint('');
+        setHint(options.item.source === 'telegram' ? 'Fetching from Telegram through your phone…' : '');
         buildControls();
         showControls();
 
@@ -490,10 +490,10 @@
                 updateControls();
                 setHint('');
             }, function (error) {
-                setHint('Could not start: ' + describe(error));
+                setHint(startFailure(error));
             });
         } catch (failure) {
-            setHint('Could not start: ' + describe(failure));
+            setHint(startFailure(failure));
         }
     }
 
@@ -621,6 +621,14 @@
         var done = ctx && ctx.onClose;
         ctx = null;
         if (done) { done(finalPos); }
+    }
+
+    function startFailure(error) {
+        if (ctx && ctx.item && ctx.item.source === 'telegram') {
+            return 'Could not start Telegram stream: ' + describe(error) +
+                '. Keep your phone on the same Wi-Fi and stop other cloud playback.';
+        }
+        return 'Could not start: ' + describe(error);
     }
 
     function describe(error) {

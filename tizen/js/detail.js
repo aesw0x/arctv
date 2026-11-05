@@ -70,6 +70,9 @@
         if (item.height >= 2160) {
             chips.appendChild(UI.el('span', 'chip', '4K'));
         }
+        if (item.source === 'telegram') {
+            chips.appendChild(UI.el('span', 'chip', 'TELEGRAM'));
+        }
         if (chips.firstChild) { info.appendChild(chips); }
 
         if (item.overview) {
