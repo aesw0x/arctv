@@ -14,12 +14,27 @@
     var regions = null;
     var savedRow = 0;
 
+    /**
+     * The film this household last reached for, which is how the phone's own rail leads. Ranking by resume
+     * position instead picked whichever file was simply longest: a half-watched episode nobody had opened
+     * in a week outranked the film watched last night. Unstamped films keep the channel's own order.
+     */
     function featuredOf(items) {
         var best = items[0];
         for (var i = 1; i < items.length; i++) {
-            if ((items[i].resumeMs || 0) > (best.resumeMs || 0)) { best = items[i]; }
+            if ((items[i].watchedAtMs || 0) > (best.watchedAtMs || 0)) { best = items[i]; }
         }
         return best;
+    }
+
+    /**
+     * A shelf row is one file, so a series arrives as "The Boys · Episode 7 · 2019". The hero names the
+     * show and moves the episode into the kicker; the film it plays is the same file either way.
+     */
+    function splitEpisode(title) {
+        var match = /^(.*?) · ((?:Episode|Part) \d+)\b/.exec(title || '');
+        if (!match) { return { show: title, episode: null }; }
+        return { show: match[1], episode: match[2] };
     }
 
     function runtimeOf(ms) {
@@ -143,10 +158,13 @@
         hero.appendChild(UI.el('div', 'hero-veil'));
 
         var body = UI.el('div', 'hero-body');
-        body.appendChild(UI.el('div', 'hero-kicker',
-            item.resumeMs > 0 ? 'Continue watching' : 'Downloaded on your phone'));
+        var naming = splitEpisode(item.title);
+        var kicker = item.resumeMs > 0 ? 'Continue watching' :
+            (item.source === 'telegram' ? 'Streams from Telegram' : 'Downloaded on your phone');
+        if (naming.episode) { kicker += ' · ' + naming.episode; }
+        body.appendChild(UI.el('div', 'hero-kicker', kicker));
 
-        var title = UI.el('h1', 'hero-title', item.title);
+        var title = UI.el('h1', 'hero-title', naming.show);
         body.appendChild(title);
 
         body.appendChild(UI.el('div', 'hero-meta', factsOf(item)));
@@ -196,6 +214,10 @@
         if (item.posterUrl) {
             var img = document.createElement('img');
             img.alt = '';
+            // Only the cards on screen ask for a picture. Artwork is now offered for every film on the
+            // shelf, and 193 simultaneous image requests is a queue the phone does not need.
+            img.loading = 'lazy';
+            img.decoding = 'async';
             img.src = ArcTV.absolute(ctx.host, item.posterUrl);
             img.addEventListener('error', function () { art.classList.add('missing'); });
             art.appendChild(img);

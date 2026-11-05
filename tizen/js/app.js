@@ -165,6 +165,7 @@
                 if (finalMs > 0) {
                     var nearEnd = item.durationMs && finalMs > item.durationMs - 30000;
                     item.resumeMs = nearEnd ? 0 : finalMs;
+                    item.watchedAtMs = Date.now();
                 }
                 if (onClose) { onClose(item); }
             }
