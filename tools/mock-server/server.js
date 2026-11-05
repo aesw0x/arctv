@@ -28,7 +28,13 @@ const PORT = Number(process.env.PORT || 8080);
 // Printed on start-up and on the summary page. Set TOKEN to keep one across runs.
 const TOKEN = process.env.TOKEN || crypto.randomBytes(9).toString('hex');
 const MEDIA_DIR = path.join(__dirname, 'media');
+// Diagnostic: the artwork shape changes with this stamp so the TV cannot reuse a cached vector poster
+// while measuring the raster one.
+const ARTWORK_STAMP = fs.existsSync(path.join(MEDIA_DIR, 'poster.jpg')) ? '&v=jpg' : '';
 const PAIR_TTL_MS = 120 * 1000;
+// Set AUTO_APPROVE=1 while driving the TV from a remote: a pairing request is approved the moment it
+// arrives, so nobody has to walk to a browser to click Allow between launches.
+const AUTO_APPROVE = Boolean(process.env.AUTO_APPROVE);
 
 const VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.ts', '.webm', '.m4v'];
 
@@ -199,8 +205,8 @@ function library() {
             width: 1920,
             height: 1080,
             mimeType: 'video/mp4',
-            posterUrl: `/artwork/${film.id}/poster?k=${TOKEN}`,
-            backdropUrl: `/artwork/${film.id}/backdrop?k=${TOKEN}`,
+            posterUrl: `/artwork/${film.id}/poster?k=${TOKEN}${ARTWORK_STAMP}`,
+            backdropUrl: `/artwork/${film.id}/backdrop?k=${TOKEN}${ARTWORK_STAMP}`,
             resumeMs: resumePositions.get(film.id) || 0,
             audioCodec: audio.codec,
             needsRemux: audio.unsupported,
@@ -350,16 +356,17 @@ function parseRange(header, size) {
     return { start, end: Math.min(endInclusive, size - 1) + 1, partial: true };
 }
 
-function send(res, status, body, type) {
+function send(res, status, body, type, extra) {
     const payload = Buffer.isBuffer(body) ? body : Buffer.from(String(body));
-    res.writeHead(status, {
+    const headers = {
         'Content-Type': type || 'text/plain; charset=utf-8',
         'Content-Length': payload.length,
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET, HEAD, POST, OPTIONS',
         'Access-Control-Allow-Headers': 'Range, X-Arc-Token, Content-Type',
         'Access-Control-Expose-Headers': 'Content-Range, Content-Length, Accept-Ranges'
-    });
+    };
+    res.writeHead(status, Object.assign(headers, extra || {}));
     res.end(payload);
 }
 
@@ -460,8 +467,10 @@ const server = http.createServer((req, res) => {
     if (url.pathname === '/api/pair/request' && req.method === 'POST') {
         sweepPairings();
         const code = Math.random().toString(36).slice(2, 8).toUpperCase();
-        pairings.set(code, { state: 'pending', createdAt: Date.now(), token: null });
-        console.log(`pairing requested -> code ${code}  (open http://localhost:${PORT}/pair?c=${code})`);
+        const entry = { state: 'pending', createdAt: Date.now(), token: null };
+        if (AUTO_APPROVE) { entry.state = 'approved'; entry.token = TOKEN; }
+        pairings.set(code, entry);
+        console.log(`pairing requested -> code ${code}  (open http://localhost:${PORT}/pair?c=${code})${AUTO_APPROVE ? ' [auto-approved]' : ''}`);
         json(res, 200, { code, expiresAt: Date.now() + PAIR_TTL_MS });
         return;
     }
@@ -501,6 +510,15 @@ const server = http.createServer((req, res) => {
         if (parts.length !== 2) { send(res, 404, ''); return; }
         const item = library().find((entry) => entry.id === parts[0]);
         if (!item || (parts[1] !== 'poster' && parts[1] !== 'backdrop')) { send(res, 404, ''); return; }
+        // Diagnostic: serve the same shape the phone does — a raster JPEG with a day of cache — so a
+        // cost measured against this fixture is a cost the real device also pays.
+        const raster = path.join(MEDIA_DIR, parts[1] === 'backdrop' ? 'backdrop.jpg' : 'poster.jpg');
+        if (fs.existsSync(raster)) {
+            const body = fs.readFileSync(raster);
+            send(res, 200, req.method === 'HEAD' ? '' : body, 'image/jpeg',
+                { 'Cache-Control': 'private, max-age=86400', 'Content-Length': body.length });
+            return;
+        }
         send(res, 200, artworkSvg(item.id, item.title, parts[1]), 'image/svg+xml');
         return;
     }

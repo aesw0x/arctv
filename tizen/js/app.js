@@ -30,7 +30,7 @@
         });
     }
 
-    function goPairing() {
+    function showPairing(options) {
         PairingScreen.stop();
         state.screen = 'pairing';
         show('pairing');
@@ -42,7 +42,25 @@
                 ArcTV.rememberHost(host);
                 loadLibrary();
             }
-        });
+        }, options || {});
+    }
+
+    function goPairing() { showPairing(); }
+
+    /**
+     * Leaving the current phone. Switching keeps its pairing, so coming back is instant; forgetting
+     * drops the token this TV holds for it, which is the most this side can do — the phone keeps its
+     * own record of the TV until it is removed there.
+     */
+    function switchPhone() { showPairing({ scanAll: true }); }
+
+    function forgetPhone() {
+        if (state.host) { ArcTV.forgetToken(state.host); }
+        state.host = null;
+        state.deviceName = '';
+        state.items = [];
+        state.item = null;
+        showPairing({ scanAll: true });
     }
 
     /**
@@ -116,7 +134,9 @@
             items: state.items,
             focusItemId: state.item ? state.item.id : null,
             onSelect: showDetail,
-            onPlay: function (item) { playItem(item, showLibrary); }
+            onPlay: function (item) { playItem(item, showLibrary); },
+            onSwitchPhone: switchPhone,
+            onForgetPhone: forgetPhone
         });
     }
 
@@ -164,7 +184,9 @@
         }
 
         if (event.keyCode === 10009 || event.keyCode === 27) {
-            if (state.screen === 'detail') {
+            if (LibraryScreen.closeSheet()) {
+                event.preventDefault();
+            } else if (state.screen === 'detail') {
                 showLibrary();
                 event.preventDefault();
             }

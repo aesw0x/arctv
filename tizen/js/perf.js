@@ -19,8 +19,8 @@
      * launch runs none of this. Pass the address of whatever is listening when you want numbers.
      */
     var match = /[?&]telemetry=([^&]+)/.exec(global.location.search || '');
-    var ENDPOINT = match ? 'http://' + decodeURIComponent(match[1]) + '/api/telemetry' : null;
-    if (!ENDPOINT) { return; }
+    if (!match) { return; }
+    var ENDPOINT = 'http://' + decodeURIComponent(match[1]) + '/api/telemetry';
 
     function now() { return performance.now(); }
 
@@ -70,6 +70,52 @@
     patch();
     global.document.addEventListener('DOMContentLoaded', patch);
 
+    /*
+     * How long a whole screen costs to rebuild, and how much DOM the rebuild leaves behind.
+     * perf.js loads after every module, so these globals already exist and app.js reaches them
+     * through the object, not a captured reference.
+     */
+    function wrapRender(name, label) {
+        var screen = global[name];
+        if (!screen || !screen.render || screen.__timedRender) { return; }
+        var original = screen.render;
+        screen.render = function () {
+            var started = now();
+            var result = original.apply(screen, arguments);
+            queue.push({
+                type: 'render',
+                label: label,
+                ms: Math.round((now() - started) * 10) / 10,
+                nodes: document.getElementsByTagName('*').length
+            });
+            var painted = 0;
+            global.requestAnimationFrame(function () {
+                painted = now();
+                global.requestAnimationFrame(function () {
+                    queue.push({ type: 'painted', label: label, ms: Math.round(painted - started) });
+                });
+            });
+            return result;
+        };
+        screen.__timedRender = true;
+    }
+
+    wrapRender('LibraryScreen', 'library');
+    wrapRender('DetailScreen', 'detail');
+    wrapRender('PairingScreen', 'pairing');
+
+    if (global.Player && global.Player.open && !global.Player.__timedOpen) {
+        var originalOpen = global.Player.open;
+        global.Player.open = function () {
+            var started = now();
+            var result = originalOpen.apply(global.Player, arguments);
+            queue.push({ type: 'open', ms: Math.round((now() - started) * 10) / 10 });
+            return result;
+        };
+        global.Player.__timedOpen = true;
+    }
+
+    var lastKeyAt = 0;
     var arrived = 0;
 
     // Capture phase, so this fires before the app's own listener: the moment the key reached the page.
@@ -78,6 +124,8 @@
         if (interesting.indexOf(event.keyCode) < 0) { return; }
 
         arrived = now();
+        var sinceLast = lastKeyAt ? Math.round(arrived - lastKeyAt) : 0;
+        lastKeyAt = arrived;
         var code = event.keyCode;
 
         global.requestAnimationFrame(function () {

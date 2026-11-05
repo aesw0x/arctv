@@ -8,6 +8,12 @@
 (function (global) {
     'use strict';
 
+    var shelf = null;
+    var sheet = null;
+    var device = null;
+    var regions = null;
+    var savedRow = 0;
+
     function featuredOf(items) {
         var best = items[0];
         for (var i = 1; i < items.length; i++) {
@@ -52,9 +58,75 @@
         var status = UI.el('div', 'status-pill');
         status.appendChild(UI.el('span', 'status-dot'));
         status.appendChild(UI.el('span', null, ctx.deviceName || ctx.host));
+        status.appendChild(UI.el('span', 'status-caret', '\u2304'));
         bar.appendChild(status);
 
-        return bar;
+        return { el: bar, device: { el: status, onSelect: function () { toggleSheet(ctx); } } };
+    }
+
+    /*
+     * The phone's name is the only way in and out of this pairing, so it is a control rather than a
+     * label: up from the hero focuses it, OK opens the sheet, and Back closes it without leaving the
+     * shelf. Both actions land on the device list; only "forget" also drops the token.
+     */
+    function buildOption(label, meta, onSelect) {
+        var row = UI.el('div', 'device-option');
+        row.appendChild(UI.el('div', 'device-option-label', label));
+        if (meta) { row.appendChild(UI.el('div', 'device-option-meta', meta)); }
+        row.addEventListener('click', onSelect);
+        return { el: row, onSelect: onSelect };
+    }
+
+    function removeSheet() {
+        if (!sheet) { return; }
+        if (sheet.parentNode) { sheet.parentNode.removeChild(sheet); }
+        sheet = null;
+    }
+
+    function openSheet(ctx) {
+        if (sheet) { return; }
+
+        sheet = UI.el('div', 'device-sheet');
+
+        var heading = UI.el('div', 'device-sheet-heading');
+        heading.appendChild(UI.el('div', 'device-sheet-title', ctx.deviceName || ctx.host));
+        heading.appendChild(UI.el('div', 'device-sheet-note', 'Back closes'));
+        sheet.appendChild(heading);
+
+        var options = UI.el('div', 'device-sheet-options');
+        var items = [
+            buildOption('Switch phone', 'Find another phone on this Wi-Fi', function () {
+                removeSheet();
+                ctx.onSwitchPhone();
+            }),
+            buildOption('Forget this phone', ctx.host, function () {
+                removeSheet();
+                ctx.onForgetPhone();
+            })
+        ];
+        for (var i = 0; i < items.length; i++) { options.appendChild(items[i].el); }
+        sheet.appendChild(options);
+
+        shelf.appendChild(sheet);
+
+        // One region per row, because up and down travel between regions here. The pill is kept in
+        // the map above the options, so up from the first option lands back on it and OK there
+        // closes the sheet again.
+        var map = [{ items: [device], columns: 1 }];
+        for (var j = 0; j < items.length; j++) { map.push({ items: [items[j]], columns: 1 }); }
+        Focus.setRegions(map, { row: 1 });
+    }
+
+    function toggleSheet(ctx) {
+        if (sheet) { closeSheet(); return; }
+        openSheet(ctx);
+    }
+
+    function closeSheet() {
+        if (!sheet) { return false; }
+        removeSheet();
+        Focus.setRegions(regions, { row: savedRow });
+        return true;
     }
 
     function buildHero(item, ctx) {
@@ -159,14 +231,25 @@
         };
     }
 
+    function trackFocus(row, index) {
+        if (regions[row]) { regions[row].index = index; }
+        savedRow = row;
+    }
+
     function render(container, ctx) {
         UI.clear(container);
+        removeSheet();
+        shelf = container;
 
-        container.appendChild(buildTopbar(ctx));
+        var topbar = buildTopbar(ctx);
+        container.appendChild(topbar.el);
+        device = topbar.device;
+        regions = [{ items: [device], columns: 1 }];
 
         if (ctx.items.length === 0) {
             container.appendChild(UI.el('div', 'empty', 'Arc Player has no films in this shelf yet.'));
-            Focus.reset();
+            savedRow = 0;
+            Focus.setRegions(regions, { row: 0, onChange: trackFocus });
             return;
         }
 
@@ -203,11 +286,14 @@
             }
         }
 
-        Focus.setRegions([
+        regions = [
+            { items: [device], columns: 1 },
             { items: hero.focusables, columns: 2 },
             { items: cards, index: startCard }
-        ], { row: remembered ? 1 : 0 });
+        ];
+        savedRow = remembered ? 2 : 1;
+        Focus.setRegions(regions, { row: savedRow, onChange: trackFocus });
     }
 
-    global.LibraryScreen = { render: render };
+    global.LibraryScreen = { render: render, closeSheet: closeSheet };
 })(window);

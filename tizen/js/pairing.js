@@ -33,7 +33,8 @@
         return dots;
     }
 
-    function render(container, ctx) {
+    function render(container, ctx, screenOptions) {
+        screenOptions = screenOptions || {};
         stop();
         UI.clear(container);
 
@@ -160,7 +161,7 @@
             UI.clear(list);
             Focus.reset();
 
-            ArcTV.discover().then(function (found) {
+            ArcTV.discover(null, { skipSaved: screenOptions.scanAll }).then(function (found) {
                 showDevices(found);
             });
         }

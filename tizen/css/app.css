@@ -112,6 +112,24 @@ body {
     border: 1px solid rgba(255, 255, 255, 0.08);
     font-size: 20px;
     color: var(--muted);
+    transition: background 0.1s ease, color 0.1s ease;
+}
+
+.status-pill.focused {
+    background: #ffffff;
+    border-color: #ffffff;
+    color: #07080d;
+}
+
+.status-caret {
+    margin-left: 12px;
+    font-size: 18px;
+    line-height: 1;
+    color: var(--dim);
+}
+
+.status-pill.focused .status-caret {
+    color: #4c5164;
 }
 
 .status-dot {
@@ -121,6 +139,70 @@ body {
     background: #4ade80;
     margin-right: 12px;
     box-shadow: 0 0 6px rgba(74, 222, 128, 0.7);
+}
+
+/*
+ * The device sheet hangs under the pill that opened it, so the two actions read as belonging to the
+ * phone rather than to the shelf. It is a sibling of the hero, not a child, because the hero clips
+ * its own painting.
+ */
+.device-sheet {
+    position: absolute;
+    top: 104px;
+    right: 84px;
+    z-index: 8;
+    width: 620px;
+    padding: 26px 28px;
+    border-radius: 24px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(8, 10, 16, 0.96);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+}
+
+.device-sheet-heading {
+    margin-bottom: 18px;
+}
+
+.device-sheet-title {
+    font-size: 28px;
+    font-weight: 650;
+    color: #ffffff;
+}
+
+.device-sheet-note {
+    margin-top: 6px;
+    font-size: 19px;
+    color: var(--muted);
+}
+
+.device-option {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 68px;
+    margin-bottom: 10px;
+    padding: 0 22px;
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.05);
+    color: #dfe2ec;
+    font-size: 23px;
+}
+
+.device-option.focused {
+    background: #ffffff;
+    border-color: #ffffff;
+    color: #07080d;
+}
+
+.device-option-meta {
+    margin-left: 24px;
+    font-size: 19px;
+    color: var(--muted);
+}
+
+.device-option.focused .device-option-meta {
+    color: #4c5164;
 }
 
 /* ---------- pairing ---------- */
@@ -749,13 +831,12 @@ body {
 
 .detail-bg {
     position: absolute;
-    top: -40px;
-    left: -40px;
-    right: -40px;
-    bottom: -40px;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
     background-size: cover;
     background-position: center 34%;
-    opacity: 0.62;
 }
 
 .detail-lift {
@@ -773,9 +854,15 @@ body {
     left: 0;
     right: 0;
     bottom: 0;
+    /*
+     * The bottom layer is the artwork's dim. `opacity` on `.detail-bg` did the same job but made
+     * this TV re-raster the whole resampled picture on every entry — ~1.3 s of blocked main thread,
+     * down to ~0.24 s with the dim folded in here.
+     */
     background:
         linear-gradient(90deg, rgba(8, 8, 10, 0.97) 0%, rgba(8, 8, 10, 0.88) 42%, rgba(8, 8, 10, 0.72) 100%),
-        linear-gradient(to top, rgba(8, 8, 10, 0.9) 0%, rgba(8, 8, 10, 0) 55%);
+        linear-gradient(to top, rgba(8, 8, 10, 0.9) 0%, rgba(8, 8, 10, 0) 55%),
+        linear-gradient(rgba(8, 8, 10, 0.38), rgba(8, 8, 10, 0.38));
 }
 
 .detail-top {

@@ -73,6 +73,11 @@
         var map = devices();
         delete map[host];
         writeJson(DEVICES_KEY, map);
+        // A forgotten phone must stop being the address this TV walks to by name, or the next search
+        // answers from the saved list and the device that was just forgotten is the only one shown.
+        if (lastHost() === host) {
+            try { localStorage.removeItem(LAST_HOST_KEY); } catch (ignored) { /* private mode */ }
+        }
     }
 
     function rememberHost(host) {
@@ -169,8 +174,14 @@
             .then(function (hits) { return sortHosts(hits.filter(Boolean)); });
     }
 
-    function discover(timeoutMs) {
+    /**
+     * `options.skipSaved` ignores the phones this TV already knows. A returning viewer should not wait
+     * on a sweep, but that same shortcut hides a second phone behind the one already paired, so
+     * switching phones has to ask the whole network.
+     */
+    function discover(timeoutMs, options) {
         timeoutMs = timeoutMs || 350;
+        options = options || {};
 
         var forced = overrideHost();
         if (forced) {
@@ -181,9 +192,7 @@
 
         var prefixes = overrideSubnet() ? [overrideSubnet()] : SUBNET_PREFIXES;
 
-        return pingSavedHosts().then(function (known) {
-            if (known.length) { return known; }
-
+        function sweepPrefixes() {
             var index = 0;
             function tryNextPrefix() {
                 if (index >= prefixes.length) { return Promise.resolve([]); }
@@ -192,6 +201,13 @@
                 });
             }
             return tryNextPrefix();
+        }
+
+        if (options.skipSaved) { return sweepPrefixes(); }
+
+        return pingSavedHosts().then(function (known) {
+            if (known.length) { return known; }
+            return sweepPrefixes();
         });
     }
 
