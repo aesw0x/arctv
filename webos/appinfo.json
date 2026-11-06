@@ -1,6 +1,6 @@
 {
   "id": "com.aeswox.arcplayer.tv",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "vendor": "Arc Player",
   "type": "web",
   "main": "index.html",
