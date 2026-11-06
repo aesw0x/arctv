@@ -27,11 +27,19 @@
      */
     var ICONS = (function () {
         function svg(paths) {
-            return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
+            return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false">' +
                 paths + '</svg>';
         }
 
         return {
+            previous: svg(
+                '<path fill="currentColor" stroke-linejoin="round" d="M8.06492 12.6258C8.31931 13.8374 9.67295 14.7077 12.3802 16.4481C15.3247 18.3411 16.797 19.2876 17.9895 18.9229C18.3934 18.7994 18.7654 18.5823 19.0777 18.2876C20 17.4178 20 15.6118 20 12C20 8.38816 20 6.58224 19.0777 5.71235C18.7654 5.41773 18.3934 5.20057 17.9895 5.07707C16.797 4.71243 15.3247 5.6589 12.3802 7.55186C9.67295 9.29233 8.31931 10.1626 8.06492 11.3742C7.97836 11.7865 7.97836 12.2135 8.06492 12.6258Z"/>' +
+                '<path stroke-linecap="round" d="M4 4V20"/>'
+            ),
+            next: svg(
+                '<path fill="currentColor" stroke-linejoin="round" d="M15.9351 12.6258C15.6807 13.8374 14.327 14.7077 11.6198 16.4481C8.67528 18.3411 7.20303 19.2876 6.01052 18.9229C5.60662 18.7994 5.23463 18.5823 4.92227 18.2876C4 17.4178 4 15.6118 4 12C4 8.38816 4 6.58224 4.92227 5.71235C5.23463 5.41773 5.60662 5.20057 6.01052 5.07707C7.20304 4.71243 8.67528 5.6589 11.6198 7.55186C14.327 9.29233 15.6807 10.1626 15.9351 11.3742C16.0216 11.7865 16.0216 12.2135 15.9351 12.6258Z"/>' +
+                '<path stroke-linecap="round" d="M20 5V19"/>'
+            ),
             fit: svg(
                 '<path stroke-linecap="round" stroke-linejoin="round" d="M2.5 12C2.5 7.52166 2.5 5.28249 3.89124 3.89124C5.28249 2.5 7.52166 2.5 12 2.5C16.4783 2.5 18.7175 2.5 20.1088 3.89124C21.5 5.28249 21.5 7.52166 21.5 12C21.5 16.4783 21.5 18.7175 20.1088 20.1088C18.7175 21.5 16.4783 21.5 12 21.5C7.52166 21.5 5.28249 21.5 3.89124 20.1088C2.5 18.7175 2.5 16.4783 2.5 12Z"/>' +
                 '<path stroke-linecap="round" stroke-linejoin="round" d="M12.9833 11.0167C12.4085 10.4419 12.5041 8 12.5041 8M12.9833 11.0167C13.5581 11.5915 16 11.4958 16 11.4958M12.9833 11.0167L17 7M11.0131 12.9868C10.4383 12.412 7.99641 12.5077 7.99641 12.5077M11.0131 12.9868C11.5879 13.5616 11.4922 16.0035 11.4922 16.0035M11.0131 12.9868L7 16.9999"/>'
@@ -70,10 +78,38 @@
     var sheetEl = null;
     var sheetTitleEl = null;
     var sheetOptionsEl = null;
+    var loadingEl = null;
+    var loadingMessageEl = null;
+    var errorBackEl = null;
+    var backdropEl = null;
+    var logoEl = null;
+    var workTitleEl = null;
+    var contextEl = null;
+    var backEl = null;
+    var logoImage = null;
+    var backdropImage = null;
+    // Keep just the last decoded logo: episode switches reuse it without an artwork cache growing.
+    var cachedLogo = null;
+    var cachedLogoUrl = '';
 
     var ctx = null;
     var mode = null;
     var active = false;
+    var generation = 0;
+    var htmlHandlers = [];
+    var ready = false;
+    var loading = false;
+    var initialLoad = true;
+    var failed = false;
+    var buffering = false;
+    var seeking = false;
+    var hasPlayed = false;
+    var lastPlayedPosition = 0;
+    var actualDuration = 0;
+    var observedPosition = null;
+    var observedAt = 0;
+    var contextAction = null;
+    var CONTEXT_FOCUS = -2;
 
     var tickTimer = null;
     var reportTimer = null;
@@ -112,21 +148,184 @@
         sheetEl = document.getElementById('player-sheet');
         sheetTitleEl = document.getElementById('player-sheet-title');
         sheetOptionsEl = document.getElementById('player-sheet-options');
-        buildControls();
+        loadingEl = document.getElementById('player-loading');
+        loadingMessageEl = document.getElementById('player-loading-message');
+        errorBackEl = document.getElementById('player-error-back');
+        backdropEl = document.getElementById('player-backdrop');
+        logoEl = document.getElementById('player-logo');
+        workTitleEl = document.getElementById('player-work-title');
+        contextEl = document.getElementById('player-context');
+        backEl = document.getElementById('player-back');
+        backEl.addEventListener('click', function () { close(); });
+        contextEl.addEventListener('click', function () { activateContext(); });
     }
 
     function isActive() { return active; }
+    function isCurrent(gen) { return active && generation === gen; }
+    function canContinue(gen) { return isCurrent(gen) && !failed; }
+    function positive(value) {
+        value = Number(value);
+        return isFinite(value) && value > 0 ? value : 0;
+    }
+
+    function clearBackdrop() {
+        if (backdropImage) { backdropImage.onload = null; backdropImage.onerror = null; }
+        backdropImage = null;
+        UI.clear(backdropEl);
+    }
+
+    function loadArtwork(options, gen) {
+        UI.clear(logoEl);
+        logoEl.classList.add('hidden');
+        workTitleEl.classList.remove('hidden');
+        workTitleEl.textContent = options.workTitle || options.title || options.item.title || '';
+        var url = options.logoUrl ? ArcTV.absolute(options.host, options.logoUrl) : '';
+        if (url) {
+            logoImage = url === cachedLogoUrl && cachedLogo ? cachedLogo : new Image();
+            var image = logoImage;
+            image.alt = workTitleEl.textContent;
+            function reveal() {
+                if (!isCurrent(gen) || !image.naturalWidth) { return; }
+                image.onload = null;
+                image.onerror = null;
+                cachedLogo = image;
+                cachedLogoUrl = url;
+                logoEl.appendChild(image);
+                logoEl.classList.remove('hidden');
+                workTitleEl.classList.add('hidden');
+            }
+            image.onload = reveal;
+            image.onerror = function () {
+                if (!isCurrent(gen)) { return; }
+                image.onload = null;
+                image.onerror = null;
+                logoEl.classList.add('hidden');
+                workTitleEl.classList.remove('hidden');
+            };
+            if (image === cachedLogo) { reveal(); }
+            else { image.src = url; }
+        }
+        clearBackdrop();
+        if (options.backdropUrl) {
+            backdropImage = new Image();
+            var backdrop = backdropImage;
+            backdrop.alt = '';
+            backdrop.onload = function () {
+                if (!isCurrent(gen) || !initialLoad) { return; }
+                backdrop.onload = null;
+                backdrop.onerror = null;
+                backdropEl.appendChild(backdrop);
+            };
+            backdrop.onerror = function () {
+                if (isCurrent(gen)) { clearBackdrop(); }
+            };
+            backdrop.src = ArcTV.absolute(options.host, options.backdropUrl);
+        }
+    }
+
+    function showLoading(message) {
+        loading = true;
+        loadingEl.classList.remove('hidden');
+        layer.classList.add('is-loading');
+        layer.setAttribute('aria-busy', failed ? 'false' : 'true');
+        loadingMessageEl.textContent = message || 'Loading…';
+        contextAction = null;
+        contextEl.classList.add('hidden');
+        closeSheet();
+        clearControlFocus();
+        showControls();
+    }
+
+    function hideLoading() {
+        if (failed) { return; }
+        var wasLoading = loading;
+        loading = false;
+        loadingEl.classList.add('hidden');
+        layer.classList.remove('is-loading');
+        layer.setAttribute('aria-busy', 'false');
+        if (wasLoading) { showControls(); }
+    }
+
+    function fail(message) {
+        if (!active || failed) { return; }
+        failed = true;
+        seeking = false;
+        buffering = false;
+        layer.classList.add('has-error');
+        errorBackEl.classList.remove('hidden');
+        showLoading(message);
+        // Leave the failed frame in place, but never continue unseen behind the error.
+        try {
+            if (mode === 'avplay' && global.webapis.avplay.getState() === 'PLAYING') {
+                global.webapis.avplay.pause();
+            } else if (mode === 'html') { video.pause(); }
+        } catch (ignored) { /* Back still closes the engine */ }
+    }
+
+    function trustedBounds() {
+        var item = ctx && ctx.item;
+        var cached = item && positive(item.durationMs);
+        var total = actualDuration;
+        if (!cached || !total || Math.abs(total - cached) > Math.max(2000, cached * 0.05)) {
+            return null;
+        }
+        var intro = positive(item.introEndMs);
+        var outro = positive(item.outroStartMs);
+        var end = item.outroEndMs === undefined || item.outroEndMs === null ?
+            total : positive(item.outroEndMs);
+        if (intro <= 1500 || intro >= total / 2) { intro = 0; }
+        if (outro < total / 2 || outro <= intro || outro >= end || end > total) {
+            outro = 0;
+        }
+        return { intro: intro, outro: outro, end: end };
+    }
+
+    function updateContext(pos) {
+        var bounds = trustedBounds();
+        var action = null;
+        if (ready && hasPlayed && !loading && !failed && !sheetOpen && bounds) {
+            if (bounds.intro && pos < bounds.intro - 1500) { action = 'intro'; }
+            else if (ctx.hasNext && typeof ctx.onStep === 'function' &&
+                    pos >= (bounds.outro || Math.max(0, actualDuration - 20000))) { action = 'next'; }
+        }
+        contextAction = action;
+        contextEl.classList.toggle('hidden', !action);
+        if (!action) {
+            if (focusIndex === CONTEXT_FOCUS) { clearControlFocus(); }
+            return;
+        }
+        var label = action === 'intro' ? 'Skip intro' : 'Next episode';
+        if (contextEl.textContent !== label) { contextEl.textContent = label; }
+        contextEl.setAttribute('aria-label', label);
+    }
+
+    function focusContext() {
+        if (!contextAction || loading || failed) { return; }
+        clearControlFocus();
+        focusIndex = CONTEXT_FOCUS;
+        contextEl.classList.add('focused');
+        contextEl.focus();
+        setHint(contextEl.textContent);
+        showControls();
+    }
+
+    function activateContext() {
+        if (!active || loading || failed) { return; }
+        updateContext(position());
+        if (contextAction === 'intro') { seekTo(trustedBounds().intro); }
+        else if (contextAction === 'next') { step(1); }
+    }
 
     function setHint(text) { if (hintEl) { hintEl.textContent = text || ''; } }
 
     function showControls() {
-        if (!overlay) { return; }
+        if (!overlay || !active) { return; }
         overlay.classList.remove('faded');
-        if (hideTimer) { clearTimeout(hideTimer); }
-        if (sheetOpen) { return; }
-
+        if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+        if (sheetOpen || loading || failed) { return; }
+        var gen = generation;
         hideTimer = setTimeout(function () {
-            if (!active || sheetOpen) { return; }
+            if (!canContinue(gen) || sheetOpen || loading) { return; }
             overlay.classList.add('faded');
             clearControlFocus();
         }, HIDE_CONTROLS_MS);
@@ -136,19 +335,30 @@
         UI.clear(controlsEl);
         controlItems = [];
 
+        var gen = generation;
         var definitions = [
-            { name: 'Aspect', icon: DISPLAY_MODES[displayMode].icon, action: cycleDisplayMode, aspect: true },
+            { name: 'Fit to screen', icon: DISPLAY_MODES[displayMode].icon, action: cycleDisplayMode, aspect: true },
             { name: 'Subtitles', icon: 'subtitles', track: 'TEXT', action: function () { openSheet('TEXT'); } },
             { name: 'Audio', icon: 'audio', track: 'AUDIO', action: function () { openSheet('AUDIO'); } }
         ];
 
+        if (ctx && typeof ctx.onStep === 'function') {
+            if (ctx.hasPrevious) {
+                definitions.unshift({ name: 'Previous episode', icon: 'previous', action: function () { step(-1); } });
+            }
+            if (ctx.hasNext) {
+                definitions.push({ name: 'Next episode', icon: 'next', action: function () { step(1); } });
+            }
+        }
         for (var i = 0; i < definitions.length; i++) {
             (function (definition) {
-                var el = UI.el('div', 'player-control');
+                var el = UI.el('button', 'player-control');
+                el.type = 'button';
+                el.tabIndex = -1;
                 el.innerHTML = ICONS[definition.icon];
                 el.setAttribute('aria-label', definition.name);
                 el.addEventListener('click', function () {
-                    if (active) { definition.action(); }
+                    if (canContinue(gen) && !loading && ready) { definition.action(); }
                 });
                 controlsEl.appendChild(el);
                 controlItems.push({
@@ -166,7 +376,8 @@
     }
 
     function setControlFocus(index) {
-        if (controlItems.length === 0) { return; }
+        if (loading || failed || controlItems.length === 0) { return; }
+        clearControlFocus();
         if (index < 0) { index = 0; }
         if (index >= controlItems.length) { index = controlItems.length - 1; }
         focusIndex = index;
@@ -177,15 +388,19 @@
         }
 
         var item = controlItems[focusIndex];
+        item.el.focus();
         setHint(item.aspect ? DISPLAY_MODES[displayMode].label : item.name);
         showControls();
     }
 
     function clearControlFocus() {
         focusIndex = -1;
+        if (contextEl) { contextEl.classList.remove('focused'); contextEl.blur(); }
         for (var i = 0; i < controlItems.length; i++) {
             controlItems[i].el.classList.remove('focused');
+            controlItems[i].el.blur();
         }
+        setHint('Left / Right to seek · OK to pause · Up / Down for controls');
     }
 
     function moveControlFocus(delta) {
@@ -216,6 +431,7 @@
             if (item.track === 'AUDIO') { count = audioTracks.length; }
             if (item.track === 'TEXT') { count = textTracks.length; }
             if (count >= 0) {
+                item.el.setAttribute('aria-disabled', count === 0 ? 'true' : 'false');
                 if (count === 0) { item.el.classList.add('disabled'); }
                 else { item.el.classList.remove('disabled'); }
             }
@@ -282,6 +498,7 @@
     }
 
     function openSheet(type) {
+        if (!active || loading || failed || !ready) { return; }
         refreshTracks();
 
         if (type === 'AUDIO' && audioTracks.length === 0) {
@@ -295,6 +512,7 @@
         }
 
         sheetOpen = true;
+        contextEl.classList.add('hidden');
         sheetType = type;
         sheetIndex = 0;
         sheetReturn = focusIndex;
@@ -307,6 +525,7 @@
     function closeSheet() {
         if (!sheetOpen) { return; }
         sheetOpen = false;
+        if (document.activeElement && sheetEl.contains(document.activeElement)) { document.activeElement.blur(); }
         sheetType = null;
         sheetItems = [];
         sheetIndex = 0;
@@ -325,7 +544,9 @@
         sheetTitleEl.textContent = sheetType === 'AUDIO' ? 'Audio track' : 'Subtitles';
 
         var current = currentTrackIndex(sheetType);
+        var gen = generation;
         sheetItems = [];
+        sheetOptionsEl.scrollTop = 0;
 
         if (sheetType === 'TEXT') {
             sheetItems.push({ index: -1, label: 'Off', meta: current === -1 ? 'Current' : '' });
@@ -347,15 +568,20 @@
 
         for (var optionIndex = 0; optionIndex < sheetItems.length; optionIndex++) {
             (function (option, optionIndex) {
-                var row = UI.el('div', 'player-option');
+                var row = UI.el('button', 'player-option');
+                row.type = 'button';
+                row.tabIndex = -1;
+                row.setAttribute('aria-label', option.label + (option.meta ? ', ' + option.meta : ''));
+                row.setAttribute('aria-pressed', option.meta === 'Current' ? 'true' : 'false');
                 if (option.meta === 'Current') { row.classList.add('selected'); }
 
-                var label = UI.el('div', 'player-option-label', option.label);
-                var meta = UI.el('div', 'player-option-meta', option.meta);
+                var label = UI.el('span', 'player-option-label', option.label);
+                var meta = UI.el('span', 'player-option-meta', option.meta);
                 row.appendChild(label);
                 row.appendChild(meta);
 
                 row.addEventListener('click', function () {
+                    if (!canContinue(gen) || !sheetOpen || loading) { return; }
                     sheetIndex = optionIndex;
                     selectSheetOption();
                 });
@@ -372,6 +598,16 @@
         for (var i = 0; i < sheetItems.length; i++) {
             if (i === sheetIndex) { sheetItems[i].el.classList.add('focused'); }
             else { sheetItems[i].el.classList.remove('focused'); }
+        }
+        var selected = sheetItems[sheetIndex];
+        if (selected) {
+            selected.el.focus({ preventScroll: true });
+            var top = selected.el.offsetTop;
+            var bottom = top + selected.el.offsetHeight;
+            if (top < sheetOptionsEl.scrollTop) { sheetOptionsEl.scrollTop = top; }
+            else if (bottom > sheetOptionsEl.scrollTop + sheetOptionsEl.clientHeight) {
+                sheetOptionsEl.scrollTop = bottom - sheetOptionsEl.clientHeight;
+            }
         }
     }
 
@@ -417,184 +653,344 @@
         showControls();
     }
 
-    function seekBy(delta) {
-        seekTo(position() + delta);
-    }
+    function seekBy(delta) { seekTo(position() + delta); }
 
     function open(options) {
         init();
         closeSilently();
-
+        var gen = generation;
         ctx = options;
         active = true;
+        ready = false;
+        failed = false;
+        buffering = false;
+        seeking = false;
+        initialLoad = true;
+        hasPlayed = false;
+        lastPlayedPosition = 0;
+        actualDuration = 0;
+        observedPosition = null;
         lastReported = -1;
         audioTracks = [];
         textTracks = [];
         displayMode = 0;
         focusIndex = -1;
-
-        layer.classList.remove('hidden');
+        contextAction = null;
+        layer.classList.remove('hidden', 'has-error');
+        layer.classList.add('is-opening');
+        errorBackEl.classList.add('hidden');
         sheetEl.classList.add('hidden');
-        titleEl.textContent = options.item.title || '';
+        titleEl.textContent = options.title || options.item.title || '';
         posEl.textContent = '0:00';
         durEl.textContent = '0:00';
         fillEl.style.width = '0%';
-        setHint(options.item.source === 'telegram' ? 'Fetching from Telegram through your phone…' : '');
         buildControls();
-        showControls();
+        loadArtwork(options, gen);
+        showLoading(options.item.source === 'telegram' ? 'Fetching from Telegram through your phone…' : 'Loading…');
 
         var url = ArcTV.streamUrl(options.host, options.item.id);
-        var startMs = options.startMs || 0;
-
+        var startMs = positive(options.startMs);
         if (hasAvplay()) {
             mode = 'avplay';
             video.classList.add('hidden');
-            startAvplay(url, startMs);
+            startAvplay(url, startMs, gen);
         } else {
             mode = 'html';
             avObject.classList.add('hidden');
-            startHtml(url, startMs);
+            startHtml(url, startMs, gen);
         }
-
-        tickTimer = setInterval(tick, 500);
-        reportTimer = setInterval(report, REPORT_MS);
+        if (!canContinue(gen)) { return; }
+        tickTimer = setInterval(function () { if (canContinue(gen)) { tick(); } }, 500);
+        reportTimer = setInterval(function () { if (canContinue(gen)) { report(); } }, REPORT_MS);
     }
 
-    function startAvplay(url, startMs) {
+    function resetObservation() {
+        observedPosition = position();
+        observedAt = Date.now();
+    }
+
+    function isPaused() {
+        if (!ready || failed) { return false; }
+        if (mode === 'avplay') {
+            try { return global.webapis.avplay.getState() === 'PAUSED'; } catch (ignored) { return false; }
+        }
+        return video.paused && !video.ended;
+    }
+
+    function isPlaying() {
+        if (!ready || failed) { return false; }
+        if (mode === 'avplay') {
+            try { return global.webapis.avplay.getState() === 'PLAYING'; } catch (ignored) { return false; }
+        }
+        return !video.paused && !video.ended && video.readyState >= 3;
+    }
+
+    // A seek target, READY state or play() call proves nothing was watched. Only an advancing
+    // playback clock can replace the last watched position, including after a paused seek.
+    function observePlayback(pos) {
+        if (!active || !ready || seeking || buffering || !isPlaying()) { return; }
+        pos = positive(pos);
+        var now = Date.now();
+        if (observedPosition !== null && pos > observedPosition &&
+                pos - observedPosition <= Math.max(2000, (now - observedAt) * 2 + 500)) {
+            hasPlayed = true;
+            lastPlayedPosition = pos;
+            duration();
+            if (initialLoad) {
+                initialLoad = false;
+                layer.classList.remove('is-opening');
+                clearBackdrop();
+            }
+            hideLoading();
+        }
+        if (pos !== observedPosition) {
+            observedPosition = pos;
+            observedAt = now;
+        }
+    }
+
+    function bufferStart() {
+        buffering = true;
+        observedPosition = null;
+        showLoading(seeking ? 'Seeking…' : 'Buffering…');
+    }
+
+    function bufferComplete() {
+        buffering = false;
+        resetObservation();
+        // Completion is not proof that playback started. Paused buffering is the exception.
+        if (!initialLoad && !seeking && isPaused()) { hideLoading(); }
+    }
+
+    function startAvplay(url, startMs, gen) {
         var av = global.webapis.avplay;
-
         try { av.close(); } catch (ignored) { /* nothing open */ }
-
         avObject.classList.remove('hidden');
-
+        function playPrepared() {
+            if (!canContinue(gen)) { return; }
+            seeking = false;
+            buffering = false;
+            observedPosition = null;
+            try {
+                av.play();
+                if (canContinue(gen)) { refreshTracks(); }
+            } catch (error) { if (canContinue(gen)) { fail(startFailure(error)); } }
+        }
         try {
             av.open(url);
             av.setDisplayRect(0, 0, 1920, 1080);
             av.setDisplayMethod(DISPLAY_MODES[displayMode].value);
             av.setListener({
-                oncurrentplaytime: function () { /* polled by tick */ },
-                onstreamcompleted: function () { close(); },
-                onerror: function (error) {
-                    setHint('Playback failed: ' + describe(error));
+                oncurrentplaytime: function (ms) {
+                    if (canContinue(gen)) { observePlayback(ms); }
                 },
-                onbufferingstart: function () { setHint('Buffering…'); },
-                onbufferingprogress: function (percent) { setHint('Buffering ' + percent + '%'); },
-                onbufferingcomplete: function () { setHint(''); }
+                onstreamcompleted: function () {
+                    if (canContinue(gen) && ready && !seeking && !initialLoad) { finish(true, 0); }
+                },
+                onerror: function (error) {
+                    if (canContinue(gen)) { fail('Playback failed: ' + describe(error)); }
+                },
+                onbufferingstart: function () { if (canContinue(gen)) { bufferStart(); } },
+                onbufferingprogress: function (percent) {
+                    if (canContinue(gen) && buffering && !seeking) {
+                        loadingMessageEl.textContent = 'Buffering ' + Math.max(0, Math.min(100, Number(percent) || 0)) + '%';
+                    }
+                },
+                onbufferingcomplete: function () { if (canContinue(gen)) { bufferComplete(); } }
             });
             av.prepareAsync(function () {
-                if (startMs > 0) {
-                    try { av.seekTo(Math.round(startMs)); } catch (ignored) { /* ignore */ }
-                }
-                av.play();
-                refreshTracks();
-                updateControls();
-                setHint('');
+                if (!canContinue(gen)) { return; }
+                ready = true;
+                duration();
+                var target = clampSeek(startMs);
+                if (target > 0) {
+                    seeking = true;
+                    try {
+                        av.seekTo(Math.round(target), playPrepared, function (error) {
+                            if (canContinue(gen)) { fail('Could not resume: ' + describe(error)); }
+                        });
+                    } catch (error) { if (canContinue(gen)) { fail('Could not resume: ' + describe(error)); } }
+                } else { playPrepared(); }
             }, function (error) {
-                setHint(startFailure(error));
+                if (canContinue(gen)) { fail(startFailure(error)); }
             });
-        } catch (failure) {
-            setHint(startFailure(failure));
-        }
+        } catch (failure) { if (canContinue(gen)) { fail(startFailure(failure)); } }
     }
 
-    function startHtml(url, startMs) {
+    function onHtml(name, gen, handler) {
+        var guarded = function () { if (canContinue(gen)) { handler(); } };
+        video.addEventListener(name, guarded);
+        htmlHandlers.push({ name: name, handler: guarded });
+    }
+
+    function playHtml(gen) {
+        if (!canContinue(gen)) { return; }
+        resetObservation();
+        try {
+            var started = video.play();
+            if (started && started.catch) {
+                started.catch(function (error) {
+                    if (canContinue(gen)) { fail('Could not start browser playback: ' + describe(error)); }
+                });
+            }
+        } catch (error) { if (canContinue(gen)) { fail(startFailure(error)); } }
+    }
+
+    function startHtml(url, startMs, gen) {
+        var initialResume = false;
         video.classList.remove('hidden');
-        video.src = url;
         video.style.objectFit = DISPLAY_MODES[displayMode].html;
-        video.addEventListener('ended', function () { close(); });
-        video.addEventListener('error', function () {
-            setHint('Playback failed: the browser rejected the stream.');
+        onHtml('loadedmetadata', gen, function () {
+            if (ready) { return; }
+            ready = true;
+            duration();
+            var target = clampSeek(startMs);
+            if (target > 0 && Math.abs(position() - target) > 50) {
+                initialResume = true;
+                seeking = true;
+                try { video.currentTime = target / 1000; }
+                catch (error) { fail('Could not resume: ' + describe(error)); }
+            } else { playHtml(gen); }
         });
-
-        if (startMs > 0) { video.currentTime = startMs / 1000; }
-
-        var started = video.play();
-        if (started && started.catch) {
-            started.catch(function () { setHint('Press OK to start playback'); });
-        }
+        onHtml('seeking', gen, function () {
+            seeking = true;
+            observedPosition = null;
+            showLoading('Seeking…');
+        });
+        onHtml('seeked', gen, function () {
+            if (!ready || !seeking || video.seeking) { return; }
+            seeking = false;
+            buffering = false;
+            resetObservation();
+            if (initialResume) { initialResume = false; playHtml(gen); }
+            else if (video.paused && !initialLoad) { hideLoading(); }
+        });
+        onHtml('playing', gen, function () { buffering = false; resetObservation(); });
+        onHtml('timeupdate', gen, function () { observePlayback(position()); });
+        onHtml('waiting', gen, bufferStart);
+        onHtml('canplay', gen, bufferComplete);
+        onHtml('ended', gen, function () {
+            if (ready && !seeking && !initialLoad && video.ended) { finish(true, 0); }
+        });
+        onHtml('error', gen, function () { fail('Playback failed: the browser rejected the stream.'); });
+        video.src = url;
+        video.load();
         updateControls();
     }
 
     function position() {
-        if (!active) { return 0; }
+        if (!active || !ready) { return 0; }
         if (mode === 'avplay') {
-            try { return global.webapis.avplay.getCurrentTime() || 0; } catch (ignored) { return 0; }
+            try { return positive(global.webapis.avplay.getCurrentTime()); } catch (ignored) { return 0; }
         }
-        return (video.currentTime || 0) * 1000;
+        return positive(video.currentTime) * 1000;
     }
 
     function duration() {
         if (!active) { return 0; }
-        if (mode === 'avplay') {
-            try { return global.webapis.avplay.getDuration() || 0; } catch (ignored) { return 0; }
-        }
-        return (video.duration || 0) * 1000;
+        var total = 0;
+        if (ready && mode === 'avplay') {
+            try { total = positive(global.webapis.avplay.getDuration()); } catch (ignored) { /* not ready */ }
+        } else if (ready && mode === 'html') { total = positive(video.duration) * 1000; }
+        if (total > 0) { actualDuration = total; }
+        return actualDuration;
+    }
+
+    function clampSeek(ms) {
+        var total = duration();
+        return Math.max(0, total > 0 ? Math.min(positive(ms), total - 1000) : positive(ms));
     }
 
     function seekTo(ms) {
-        if (!active) { return; }
-        var total = duration();
-        if (ms < 0) { ms = 0; }
-        if (total > 0 && ms > total - 1000) { ms = total - 1000; }
-
-        if (mode === 'avplay') {
-            try { global.webapis.avplay.seekTo(Math.round(ms)); } catch (ignored) { /* ignore */ }
-        } else {
-            video.currentTime = ms / 1000;
-        }
-        tick();
-        showControls();
+        if (!active || !ready || loading || failed || seeking || !duration()) { return; }
+        ms = clampSeek(ms);
+        if (Math.abs(ms - position()) < 250) { return; }
+        observePlayback(position());
+        var gen = generation;
+        var resume = isPlaying();
+        seeking = true;
+        buffering = false;
+        observedPosition = null;
+        showLoading('Seeking…');
+        try {
+            if (mode === 'avplay') {
+                var av = global.webapis.avplay;
+                if (resume) { av.pause(); }
+                av.seekTo(Math.round(ms), function () {
+                    if (!canContinue(gen)) { return; }
+                    seeking = false;
+                    buffering = false;
+                    observedPosition = null;
+                    if (resume) {
+                        try { av.play(); } catch (error) { fail('Could not continue: ' + describe(error)); }
+                    } else { hideLoading(); }
+                }, function (error) {
+                    if (canContinue(gen)) { fail('Could not seek: ' + describe(error)); }
+                });
+            } else { video.currentTime = ms / 1000; }
+        } catch (error) { if (canContinue(gen)) { fail('Could not seek: ' + describe(error)); } }
     }
 
     function toggle() {
-        if (!active) { return; }
-        if (mode === 'avplay') {
-            var av = global.webapis.avplay;
-            try {
+        if (!active || !ready || loading || failed) { return; }
+        observePlayback(position());
+        try {
+            if (mode === 'avplay') {
+                var av = global.webapis.avplay;
                 if (av.getState() === 'PLAYING') { av.pause(); }
-                else { av.play(); }
-            } catch (ignored) { /* ignore */ }
-        } else if (video.paused) {
-            video.play();
-        } else {
-            video.pause();
-        }
+                else { resetObservation(); av.play(); }
+            } else if (video.paused) { playHtml(generation); }
+            else { video.pause(); }
+        } catch (error) { fail('Could not change playback: ' + describe(error)); }
         updateControls();
         showControls();
     }
 
     function tick() {
-        if (!active) { return; }
+        if (!active || failed) { return; }
         var pos = position();
         var total = duration();
+        observePlayback(pos);
         posEl.textContent = UI.formatTime(pos);
         if (total > 0) {
             durEl.textContent = UI.formatTime(total);
             fillEl.style.width = Math.min(100, (pos / total) * 100) + '%';
         }
-
-        if (audioTracks.length === 0 && textTracks.length === 0) { refreshTracks(); }
+        updateContext(pos);
+        if (ready && !loading && audioTracks.length === 0 && textTracks.length === 0) { refreshTracks(); }
         updateControls();
     }
 
     function report(force) {
-        if (!ctx) { return; }
-        var pos = position();
+        if (!ctx || !hasPlayed) { return; }
+        var pos = lastPlayedPosition;
         if (pos < 1000) { return; }
         if (!force && lastReported >= 0 && Math.abs(pos - lastReported) < 5000) { return; }
         lastReported = pos;
-        ArcTV.postProgress(ctx.host, ctx.item.id, pos, duration() || ctx.item.durationMs || 0);
+        // The phone applies ResumeRules (including its non-credit tail) to this observed position.
+        // Do not turn the resume-clearing tail into a watched verdict or send a requested seek.
+        try { ArcTV.postProgress(ctx.host, ctx.item.id, pos, duration() || positive(ctx.item.durationMs)); }
+        catch (ignored) { /* progress is best effort; cleanup must still happen */ }
     }
 
     function closeSilently() {
+        // Invalidate first: stop/close/load can themselves dispatch old media callbacks.
+        generation++;
+        active = false;
         if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
         if (reportTimer) { clearInterval(reportTimer); reportTimer = null; }
         if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
-
+        for (var i = 0; i < htmlHandlers.length; i++) {
+            video.removeEventListener(htmlHandlers[i].name, htmlHandlers[i].handler);
+        }
+        htmlHandlers = [];
+        if (logoImage) { logoImage.onload = null; logoImage.onerror = null; }
+        logoImage = null;
+        clearBackdrop();
         sheetReturn = -1;
         closeSheet();
         clearControlFocus();
-
+        if (document.activeElement && layer.contains(document.activeElement)) { document.activeElement.blur(); }
         if (mode === 'avplay') {
             try { global.webapis.avplay.stop(); } catch (ignored) { /* ignore */ }
             try { global.webapis.avplay.close(); } catch (ignored) { /* ignore */ }
@@ -605,23 +1001,39 @@
                 video.load();
             } catch (ignored) { /* ignore */ }
         }
-
         mode = null;
-        active = false;
+        ctx = null;
+        ready = false;
+        loading = false;
+        contextAction = null;
+        layer.classList.add('hidden');
+        layer.setAttribute('aria-busy', 'false');
     }
 
-    function close() {
+    function finish(ended, delta) {
         if (!active) { return; }
-        var finalPos = position();
+        var finalPos = hasPlayed ? lastPlayedPosition : 0;
+        var total = duration() || positive(ctx.item.durationMs);
+        var bounds = trustedBounds();
+        var finished = hasPlayed && (ended || !!(bounds && bounds.outro &&
+            finalPos >= bounds.outro && finalPos <= bounds.end));
+        var done = delta ? ctx.onStep : ctx.onClose;
         report(true);
         closeSilently();
-
-        layer.classList.add('hidden');
-
-        var done = ctx && ctx.onClose;
-        ctx = null;
-        if (done) { done(finalPos); }
+        // The callback may synchronously open the next episode. Nothing old may run after it.
+        if (typeof done === 'function') {
+            if (delta) { done(delta, finalPos, total, finished); }
+            else { done(finalPos, total, finished); }
+        }
     }
+
+    function step(delta) {
+        if (!active || loading || failed || (delta !== -1 && delta !== 1) ||
+                typeof ctx.onStep !== 'function' || !(delta < 0 ? ctx.hasPrevious : ctx.hasNext)) { return; }
+        finish(false, delta);
+    }
+
+    function close() { finish(false, 0); }
 
     function startFailure(error) {
         if (ctx && ctx.item && ctx.item.source === 'telegram') {
@@ -642,17 +1054,27 @@
         if (!active) { return false; }
         var code = event.keyCode;
         showControls();
+        if (loading || failed) {
+            if (Platform.isBack(event) || code === 413) { close(); }
+            return true;
+        }
 
         if (sheetOpen) {
             if (code === 37 || code === 38) { moveSheet(-1); return true; }
             if (code === 39 || code === 40) { moveSheet(1); return true; }
             if (code === 13) { selectSheetOption(); return true; }
-            if (code === 10009 || code === 27) { closeSheet(); return true; }
+            if (Platform.isBack(event)) { closeSheet(); return true; }
             if (code === 413) { close(); return true; }
             return true;
         }
 
-        if (code === 38 || code === 40) {
+        if (code === 38) {
+            if (focusIndex >= 0 || focusIndex === CONTEXT_FOCUS) { clearControlFocus(); }
+            else if (contextAction) { focusContext(); }
+            else { setControlFocus(0); }
+            return true;
+        }
+        if (code === 40) {
             if (focusIndex < 0) { setControlFocus(0); }
             else { clearControlFocus(); }
             return true;
@@ -660,19 +1082,20 @@
 
         if (focusIndex >= 0 && code === 37) { moveControlFocus(-1); return true; }
         if (focusIndex >= 0 && code === 39) { moveControlFocus(1); return true; }
-
+        if (focusIndex === CONTEXT_FOCUS && (code === 37 || code === 39)) { return true; }
         if (code === 37) { seekBy(-SEEK_STEP_MS); return true; }
         if (code === 39) { seekBy(SEEK_STEP_MS); return true; }
         if (code === 13) {
-            if (focusIndex >= 0) { activateControl(); }
+            if (focusIndex === CONTEXT_FOCUS) { activateContext(); }
+            else if (focusIndex >= 0) { activateControl(); }
             else { toggle(); }
             return true;
         }
-        if (code === 415 || code === 19) { toggle(); return true; }
+        if (code === 415 || code === 19 || code === 10252) { toggle(); return true; }
         if (code === 412) { seekBy(-LARGE_STEP_MS); return true; }
         if (code === 417) { seekBy(LARGE_STEP_MS); return true; }
         if (code === 413) { close(); return true; }
-        if (code === 10009 || code === 27) { close(); return true; }
+        if (Platform.isBack(event)) { close(); return true; }
         return true;
     }
 

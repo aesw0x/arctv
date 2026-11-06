@@ -13,8 +13,8 @@
         screen: 'boot',
         host: null,
         deviceName: '',
-        items: [],
-        item: null
+        groups: [],
+        group: null
     };
 
     var screens = {
@@ -23,7 +23,12 @@
         detail: document.getElementById('screen-detail')
     };
 
+    /*
+     * The only way a screen becomes visible. While the launch mark is up, Splash takes the request
+     * rather than applying it — nothing paints, and nothing animates in, behind an opaque curtain.
+     */
     function show(name) {
+        if (Splash.hold(function () { show(name); })) { return; }
         Object.keys(screens).forEach(function (key) {
             if (key === name) { screens[key].classList.remove('hidden'); }
             else { screens[key].classList.add('hidden'); }
@@ -58,8 +63,8 @@
         if (state.host) { ArcTV.forgetToken(state.host); }
         state.host = null;
         state.deviceName = '';
-        state.items = [];
-        state.item = null;
+        state.groups = [];
+        state.group = null;
         showPairing({ scanAll: true });
     }
 
@@ -93,7 +98,7 @@
         showLibraryLoading();
 
         ArcTV.library(state.host).then(function (payload) {
-            state.items = (payload && payload.items) ? payload.items : [];
+            state.groups = (payload && payload.groups) ? payload.groups : [];
             showLibrary();
         }).catch(function (error) {
             if (error && error.code === 401) { goPairing(); return; }
@@ -117,7 +122,7 @@
         choose.addEventListener('click', goPairing);
         actions.appendChild(choose);
         wrap.appendChild(actions);
-        screens.library.appendChild(wrap);
+        screens.library.appendChild(UI.arrive(wrap, 0));
 
         Focus.set([
             { el: retry, onSelect: loadLibrary },
@@ -131,45 +136,105 @@
         LibraryScreen.render(screens.library, {
             host: state.host,
             deviceName: state.deviceName,
-            items: state.items,
-            focusItemId: state.item ? state.item.id : null,
+            works: state.groups,
+            focusWorkKey: state.group ? state.group.key : null,
             onSelect: showDetail,
-            onPlay: function (item) { playItem(item, showLibrary); },
+            onPlay: function (work) { playWork(work, showLibrary); },
             onSwitchPhone: switchPhone,
             onForgetPhone: forgetPhone
         });
     }
 
-    function showDetail(item) {
+    function showDetail(work) {
         state.screen = 'detail';
-        state.item = item;
+        state.group = work;
         show('detail');
         DetailScreen.render(screens.detail, {
             host: state.host,
-            item: item,
-            onPlay: function (chosen) { playItem(chosen, showDetail); }
+            work: work,
+            part: ArcTV.playPartOf(work),
+            onPlay: function () { playWork(work, showDetail); },
+            onPlayPart: function (part, startMs) { playPart(work, part, startMs, showDetail); }
         });
     }
 
-    /**
-     * The library, the film page and the hero all start playback the same way, so the resume
-     * point is written back to the shared item object once and every screen agrees on it.
-     */
-    function playItem(item, onClose) {
-        state.item = item;
+    function playWork(work, onClose) {
+        playPart(work, ArcTV.playPartOf(work), work.playResumeMs || 0, onClose);
+    }
+
+    function adjacentEpisode(work, part, delta) {
+        var episodes = work.episodes || [];
+        var episode = ArcTV.episodeOf(work, part.id);
+        var index = episodes.indexOf(episode);
+        return index >= 0 ? episodes[index + delta] : null;
+    }
+
+    function playPart(work, part, startMs, onClose) {
+        if (!part) { return; }
+        state.group = work;
+        var label = ArcTV.partLabelOf(work, part);
         Player.open({
             host: state.host,
-            item: item,
-            startMs: item.resumeMs || 0,
-            onClose: function (finalMs) {
-                if (finalMs > 0) {
-                    var nearEnd = item.durationMs && finalMs > item.durationMs - 30000;
-                    item.resumeMs = nearEnd ? 0 : finalMs;
-                    item.watchedAtMs = Date.now();
-                }
-                if (onClose) { onClose(item); }
+            item: part,
+            title: label ? work.title + ' · ' + label : work.title,
+            workTitle: work.title,
+            logoUrl: work.logoUrl,
+            backdropUrl: work.backdropUrl,
+            startMs: startMs || 0,
+            hasPrevious: !!adjacentEpisode(work, part, -1),
+            hasNext: !!adjacentEpisode(work, part, 1),
+            onStep: function (delta, finalMs, totalMs, finished) {
+                stamp(work, part, finalMs, totalMs, finished);
+                var next = adjacentEpisode(work, part, delta);
+                if (next) {
+                    playPart(work, ArcTV.partOf(work, next.playId), next.resumeMs, onClose);
+                } else if (onClose) { onClose(work); }
+            },
+            onClose: function (finalMs, totalMs, finished) {
+                stamp(work, part, finalMs, totalMs, finished);
+                if (onClose) { onClose(work); }
             }
         });
+    }
+
+    function stamp(work, part, finalMs, totalMs, finished) {
+        if (finalMs <= 0) { return; }
+        var now = Date.now();
+        var length = totalMs || part.durationMs || 0;
+        var nearEnd = length > 0 && finalMs >= length - Math.min(length * 0.08, 90000);
+        var position = finished || nearEnd || (length > 0 && length < 30000) ? 0 :
+            (finalMs >= 3000 ? finalMs : part.resumeMs || 0);
+        var episode = ArcTV.episodeOf(work, part.id);
+        var copyIds = episode ? episode.copyIds : work.items.map(function (item) { return item.id; });
+        copyIds.forEach(function (id) { ArcTV.partOf(work, id).resumeMs = position; });
+        part.durationMs = length;
+        part.watchedAtMs = now;
+        work.watchedAtMs = now;
+        work.playId = part.id;
+        work.playResumeMs = position;
+        if (episode) {
+            episode.playId = part.id;
+            episode.resumeMs = position;
+            episode.durationMs = length;
+            episode.watched = position > 0 ? false : (finished || episode.watched);
+        }
+
+        if (position > 0) {
+            work.resumeId = part.id;
+            work.resumeMs = position;
+            work.resumeLengthMs = length;
+        } else if (copyIds.indexOf(work.resumeId) >= 0) {
+            work.resumeId = null;
+            work.resumeMs = 0;
+            work.resumeLengthMs = 0;
+        }
+        if (finished) {
+            var next = adjacentEpisode(work, part, 1);
+            if (next) {
+                work.playId = next.playId;
+                work.playResumeMs = next.resumeMs;
+            }
+        }
     }
 
     function handleKey(event) {
@@ -179,13 +244,18 @@
             return;
         }
 
+        if (Splash.skip()) {
+            event.preventDefault();
+            return;
+        }
+
         if (Focus.handleKey(event)) {
             event.preventDefault();
             return;
         }
 
-        if (event.keyCode === 10009 || event.keyCode === 27) {
-            if (LibraryScreen.closeSheet()) {
+        if (Platform.isBack(event)) {
+            if (DetailScreen.closeSheet() || LibraryScreen.closeSheet()) {
                 event.preventDefault();
             } else if (state.screen === 'detail') {
                 showLibrary();
@@ -196,12 +266,7 @@
 
     document.addEventListener('keydown', handleKey);
 
-    if (global.tizen && global.tizen.tvinputdevice && global.tizen.tvinputdevice.registerKey) {
-        ['MediaPlayPause', 'MediaPlay', 'MediaPause', 'MediaStop',
-            'MediaFastForward', 'MediaRewind'].forEach(function (key) {
-            try { global.tizen.tvinputdevice.registerKey(key); } catch (ignored) { /* ignore */ }
-        });
-    }
+    Platform.registerKeys();
 
     goPairing();
 })(window);

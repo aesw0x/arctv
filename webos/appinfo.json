@@ -1,0 +1,14 @@
+{
+  "id": "com.aeswox.arcplayer.tv",
+  "version": "0.2.2",
+  "vendor": "Arc Player",
+  "type": "web",
+  "main": "index.html",
+  "title": "Arc TV",
+  "icon": "icon.png",
+  "appDescription": "Your Telegram library, on the television.",
+  "splashBackground": "icon.png",
+  "bgImage": "icon.png",
+  "requiredACG": [],
+  "accessible": false
+}

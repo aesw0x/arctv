@@ -33,8 +33,8 @@ as they will against the real thing.
 | `POST /api/pair/request` | returns a 6-char code |
 | `GET /pair?c=CODE` | **browser page** that approves the pairing |
 | `GET /api/pair/status?c=CODE` | polled by the TV |
-| `GET /api/library` | 12 fake titles |
-| `GET /api/poster/{id}` | generated SVG artwork |
+| `GET /api/library` | 14 works over 25 files — two copies of Dune, a two-season show with two copies of S05E01, a one-season miniseries |
+| `GET /artwork/{id}/poster` | generated SVG artwork |
 | `GET /api/subtitles/{id}` | 4-cue SRT |
 | `GET /api/progress` | GET and POST |
 | `HEAD /stream/{id}` | full size advertised |

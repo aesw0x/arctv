@@ -90,7 +90,7 @@ Trivial, but it is what discovery depends on. Must answer in well under 400 ms a
 `Access-Control-Allow-Origin: *`.
 
 ```json
-{"service":"arcplayer","version":1,"device":"Pixel 8","pairing":"open"}
+{"service":"arcplayer","version":2,"device":"Pixel 8","pairing":"open"}
 ```
 
 `device` is `"${Build.MANUFACTURER} ${Build.MODEL}"`. `pairing` is always `open`: a phone can
@@ -99,9 +99,23 @@ Allow.
 
 ### 4.2 `GET /api/library?k=…`
 
-`ShelfLibrary.items(context)` reads the manifest, then keeps the rows the ledger says are
-finished and filed. Each becomes the JSON shape in `PROTOCOL.md` §4.1. Three fields are derived
-rather than copied:
+Two reads sit behind this route. `ShelfLibrary.items(context)` answers one file for every row the
+manifest carries, and `ShelfLibrary.groups(context)` — what the route serialises — folds those
+files into works:
+
+- The fold is the phone's own `TitleGroups.group`, asked of the same names its grid reads, so the
+  two shelves cannot disagree about what one work is. A show uploaded episode by episode is one
+  card on the television, not ninety.
+- Which part a card opens is `PlayOrder.nextCopy` over that work's slots, and which part is still
+  underway is `PlayOrder.progress`. Those two give `playId` / `playResumeMs` and `resumeId` /
+  `resumeMs`, which is the same verdict the phone's own Play button gets. A television that opened
+  `items[0]` would be picking an episode for the viewer instead of resuming the one they are
+  sitting in.
+- `items` arrives in the phone's watch order — copies of one part adjacent, the copy it would play
+  first at the front of its part — so a card is a work plus the file the phone would hand over.
+
+Each part becomes the "A part" shape in `PROTOCOL.md` §4.1. Three fields are derived rather than
+copied:
 
 ```kotlin
 val bitrateMbps = sizeBytes * 8.0 / durationMs / 1000.0        // 0.0 when durationMs is 0
@@ -109,7 +123,8 @@ val audio = AudioTag.of(video.title)                            // codec from th
 // audio.codec -> "audioCodec"      audio.unsupported -> "needsRemux"
 ```
 
-`resumeMs` comes from `ResumeBlob.read(context)`, defaulting to `0`.
+`resumeMs` comes from `ResumeBlob.read(context)`, defaulting to `0`, and `source` reads the ledger:
+a copy with a complete offline file says `local`, everything else says `telegram` and streams.
 
 `AudioTag` is a filename reader, not a probe: there is no MediaExtractor, no ffprobe and no
 demuxer involved. It recognises the DTS family, Dolby (AC-3 / E-AC-3), FLAC, Opus, AAC and MP3,

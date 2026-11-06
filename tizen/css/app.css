@@ -16,6 +16,89 @@
     --surface-hi: #23232c;
     --warn: #f0b429;
     --warn-bg: #241c08;
+
+    --motion-fast: 150ms;
+    --motion-std: 240ms;
+    --motion-slow: 330ms;
+    --ease-arrive: cubic-bezier(0.16, 0.84, 0.3, 1);
+}
+
+/*
+ * ---------- motion ----------
+ *
+ * Four rules, because this panel pays for raster and forgives compositing:
+ *
+ * 1. Only `transform` and `opacity` ever animate. No width, height, top, left, margin, filter or
+ *    box-shadow — those re-raster, and re-rastering a 1920×1080 sheet is what this device cannot do.
+ * 2. Nothing moves over a playing frame. The video sits in its own hardware layer and any animating
+ *    overlay drags it into software compositing, so the player chrome keeps its hard cut. The loader
+ *    is exempt: it covers the screen before playback starts.
+ * 3. An arrival animates at most eight elements. What comes after them simply appears, so a long
+ *    episode list is never a queue of fifteen half-frames.
+ * 4. Exits are instant. A key press must never wait for an animation to finish before the next screen
+ *    is on screen.
+ */
+
+@keyframes arc-arrive {
+    from { opacity: 0; transform: translateY(16px); }
+    to { opacity: 1; transform: none; }
+}
+
+@keyframes arc-fade {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes arc-settle {
+    from { opacity: 0; transform: translateY(10px) scale(0.98); }
+    to { opacity: 1; transform: none; }
+}
+
+@keyframes arc-pop {
+    from { opacity: 0; transform: scale(0.94); }
+    to { opacity: 1; transform: none; }
+}
+
+@keyframes arc-sheet-down {
+    from { opacity: 0; transform: translateY(-14px); }
+    to { opacity: 1; transform: none; }
+}
+
+/*
+ * An element carrying `.arrive` plays one arrival, and JavaScript hands it the position in the queue
+ * through animation-delay. `backwards` is what makes the wait honest: an item holds its starting
+ * state instead of flashing plain and then jumping back.
+ */
+.arrive {
+    animation: arc-arrive var(--motion-std) var(--ease-arrive) backwards;
+}
+
+.arrive-fade {
+    animation: arc-fade var(--motion-fast) ease-out backwards;
+}
+
+.arrive-settle {
+    animation: arc-settle var(--motion-std) var(--ease-arrive) backwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .arrive,
+    .arrive-fade,
+    .arrive-settle,
+    .device-sheet,
+    .detail-copy-backdrop,
+    .detail-copy-sheet,
+    #player-logo img,
+    .player-loading-content,
+    #splash .splash-arm,
+    #splash .splash-body,
+    #splash #splash-mark {
+        animation: none !important;
+    }
+
+    * {
+        transition: none !important;
+    }
 }
 
 html,
@@ -66,6 +149,152 @@ body {
     display: none !important;
 }
 
+/* ---------- launch mark ---------- */
+
+/*
+ * The phone's clapperboard, drawn on the black the stage is already painted in, stroke for stroke from
+ * the same geometry as the launcher icon (Arc Player's ui/components/ClapperIntro.kt).
+ *
+ * The drawing is five transitions on `stroke-dashoffset` and three keyframe animations. There is no
+ * frame loop, nothing is measured in JavaScript, and the mark is 320px of a 1920×1080 stage — about a
+ * thirtieth of the pixels this panel would have re-rastered for one episode row. The reason it is
+ * affordable at all is where it sits in the app's life: the screens behind it stay `display:none`
+ * until it is gone (see js/splash.js), so no poster, no artwork and no sheet is competing for the
+ * frames it uses, and the only thing running underneath is the network.
+ */
+
+#splash {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 60;
+    width: 1920px;
+    height: 1080px;
+    background: var(--bg);
+}
+
+#splash-mark {
+    position: absolute;
+    left: 800px;
+    top: 380px;
+    width: 320px;
+    height: 320px;
+    overflow: visible;
+}
+
+/*
+ * `pathLength="1"` normalises every stroke to a length of one, so a dash of "1 1" and an offset walking
+ * from 1 to 0 draws it — no getTotalLength() on the panel, and the undrawn state can live here in CSS
+ * so the finished mark never flashes before the drawing begins.
+ */
+#splash-mark path {
+    fill: none;
+    stroke: #ffffff;
+    stroke-width: 2;
+    stroke-dasharray: 1 1;
+    stroke-dashoffset: 1;
+    transition-property: stroke-dashoffset;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.5, 1);
+}
+
+#splash.is-inking #splash-mark path {
+    stroke-dashoffset: 0;
+}
+
+/*
+ * The pen lays the strokes in the order a hand would — board, its slate line, arm, then the two hatches
+ * across the arm — and every window overlaps the next, so the mark is never not being drawn until it is
+ * finished. These are the phone's own beats; change them there and here together.
+ */
+.splash-board {
+    transition-duration: 520ms;
+}
+
+.splash-arm-ink {
+    transition-duration: 560ms;
+    transition-delay: 140ms;
+}
+
+.splash-slate {
+    stroke-linecap: round;
+    transition-duration: 260ms;
+    transition-delay: 380ms;
+}
+
+.splash-hatch-left {
+    transition-duration: 280ms;
+    transition-delay: 500ms;
+}
+
+.splash-hatch-right {
+    transition-duration: 280ms;
+    transition-delay: 580ms;
+}
+
+/* The arm turns about the point it shares with the board, which is the hinge it closes on. */
+.splash-arm {
+    transform-box: view-box;
+    transform-origin: 3.4983px 10.5px;
+}
+
+/* The squash is about the ink's own middle, so the clap compresses the mark instead of sliding it. */
+.splash-body {
+    transform-box: view-box;
+    transform-origin: 11.98px 11.95px;
+}
+
+/*
+ * One run, four beats: the arm lifts 7° (900-1020), falls to the board accelerating rather than easing
+ * into it (1020-1115, an eased fall lands like a feather), rocks back off the impact and settles closed
+ * at 15.28° — the angle between the arm's edge and the board's, which is exactly how far it has to come
+ * down to lie flat.
+ */
+@keyframes arc-clap {
+    0% {
+        transform: rotate(0deg);
+        animation-timing-function: ease-out;
+    }
+    29% {
+        transform: rotate(-7deg);
+        animation-timing-function: cubic-bezier(0.3, 0, 0.8, 0.3);
+    }
+    51% {
+        transform: rotate(15.28deg);
+        animation-timing-function: ease-out;
+    }
+    62% {
+        transform: rotate(13.6deg);
+        animation-timing-function: ease-in-out;
+    }
+    100% {
+        transform: rotate(15.28deg);
+    }
+}
+
+@keyframes arc-jolt {
+    0% { transform: scale(1, 1); }
+    18% { transform: scale(1.02, 0.975); }
+    100% { transform: scale(1, 1); }
+}
+
+/* The mark lets go of the screen the way the phone does it: into the black behind it, and smaller. */
+@keyframes arc-mark-out {
+    from { opacity: 1; transform: scale(1); }
+    to { opacity: 0; transform: scale(0.88); }
+}
+
+#splash.is-inking .splash-arm {
+    animation: arc-clap 420ms linear 900ms 1 normal both;
+}
+
+#splash.is-inking .splash-body {
+    animation: arc-jolt 205ms ease-out 1115ms 1 normal both;
+}
+
+#splash.is-inking #splash-mark {
+    animation: arc-mark-out 400ms cubic-bezier(0.4, 0, 0.6, 1) 1360ms 1 normal forwards;
+}
+
 /* ---------- brand ---------- */
 
 .brand {
@@ -112,13 +341,18 @@ body {
     border: 1px solid rgba(255, 255, 255, 0.08);
     font-size: 20px;
     color: var(--muted);
-    transition: background 0.1s ease, color 0.1s ease;
+    transition: background 120ms ease, color 120ms ease, transform var(--motion-fast) var(--ease-arrive);
 }
 
+/*
+ * The white is painted through background and border, which re-raster, so it arrives with the state.
+ * Only the scale glides.
+ */
 .status-pill.focused {
     background: #ffffff;
     border-color: #ffffff;
     color: #07080d;
+    transform: scale(1.03);
 }
 
 .status-caret {
@@ -147,16 +381,20 @@ body {
  * its own painting.
  */
 .device-sheet {
-    position: absolute;
+    position: fixed;
     top: 104px;
     right: 84px;
     z-index: 8;
     width: 620px;
     padding: 26px 28px;
     border-radius: 24px;
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    background: rgba(8, 10, 16, 0.96);
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+    /*
+     * The animation carries its own paint: an opaque panel that has to be re-rastered anyway once it
+     * is asked to travel, and the blur it would have needed is the one thing this panel cannot afford.
+     */
+    background: #0a0c12;
+    animation: arc-sheet-down var(--motion-std) var(--ease-arrive) backwards;
 }
 
 .device-sheet-heading {
@@ -187,12 +425,14 @@ body {
     background: rgba(255, 255, 255, 0.05);
     color: #dfe2ec;
     font-size: 23px;
+    transition: background 120ms ease, color 120ms ease, transform var(--motion-fast) var(--ease-arrive);
 }
 
 .device-option.focused {
     background: #ffffff;
     border-color: #ffffff;
     color: #07080d;
+    transform: translateX(8px);
 }
 
 .device-option-meta {
@@ -261,6 +501,7 @@ body {
     background: var(--surface);
     border: 2px solid transparent;
     border-radius: 18px;
+    transition: background 120ms ease, border-color 120ms ease, transform var(--motion-fast) var(--ease-arrive);
 }
 
 .device-row.focused {
@@ -314,10 +555,12 @@ body {
     line-height: 1;
     color: var(--dim);
     margin-left: 20px;
+    transition: color 120ms ease, transform var(--motion-fast) var(--ease-arrive);
 }
 
 .device-row.focused .device-chevron {
     color: #ffffff;
+    transform: translateX(6px);
 }
 
 .scanning {
@@ -371,7 +614,7 @@ body {
     border-radius: 12px;
     cursor: pointer;
     outline: none;
-    transition: background 0.1s ease, color 0.1s ease;
+    transition: background 120ms ease, color 120ms ease, transform var(--motion-fast) var(--ease-arrive);
 }
 
 .button.focused,
@@ -399,14 +642,32 @@ body {
 
 /* ---------- library ---------- */
 
+/*
+ * The shelf scrolls. One rail used to sit inside the hero's own screenful, but a shelf of cards —
+ * what is going on, then the films, then the shows — is taller than one screen, and a television
+ * expects to walk down a page the way the phone does. The focus engine scrolls whichever ancestor
+ * actually moves, so the rows travel with it and the hero stays exactly where it was put.
+ */
 #screen-library {
     display: block;
-    padding: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
     background: #08080a;
 }
 
+#screen-library::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+}
+
+/*
+ * Fixed rather than absolute, because an absolute bar inside a scrolling page slides off the top.
+ * The transform on #stage makes the stage its containing block, so it pins to the screen the same
+ * way it did when there was nothing to scroll — which is the point: the phone's name is the only
+ * way out of this pairing, so it stays reachable from the last row of the shelf.
+ */
 .topbar {
-    position: absolute;
+    position: fixed;
     top: 0;
     left: 0;
     right: 0;
@@ -428,12 +689,13 @@ body {
 
 /* ---------- hero ---------- */
 
+/*
+ * One screenful minus the band the first rail now occupies in flow. The veil reaches pure background
+ * at the hero's own bottom edge, so the row that follows arrives out of black rather than at a cut.
+ */
 .hero {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
+    position: relative;
+    height: 720px;
     overflow: hidden;
     background: radial-gradient(1100px 700px at 78% 24%, #262631 0%, #111117 52%, #08080a 100%);
     contain: layout paint;
@@ -477,13 +739,13 @@ body {
 
 /*
  * The text block hangs from just above the rail instead of floating in the middle: the hero art
- * fills the whole screen now, and a centred block left an empty band between the buttons and the
+ * fills its own screenful now, and a centred block left an empty band between the buttons and the
  * posters. Gaps widen as the type gets bigger, so the title reads as the anchor.
  */
 .hero-body {
     position: absolute;
     top: 104px;
-    bottom: 494px;
+    bottom: 134px;
     left: 84px;
     display: flex;
     flex-direction: column;
@@ -572,16 +834,19 @@ body {
  * it stop being cut off. Padding belongs to the scroller: a focused poster grows 5.5% and wears a
  * 13px ring, so it bleeds roughly 18px sideways and 23px up and down past its own box, and the clip
  * edge has to sit outside that or the ring is sliced — the left of it at the start of the row.
- * `right` pulls the rail box in by the padding the scroller then pushes back out, so the row still
- * cuts at the screen edge instead of spilling past the stage.
+ * The horizontal negatives are what let a row cut at the screen edge while its posters still line up
+ * with the hero's text at 84px; `right` pulls the rail box in by the padding the scroller pushes back
+ * out. Rows stack now, so the vertical pair stays: a row's own top padding is the gap above it.
  */
 
 .rails {
-    position: absolute;
-    left: 84px;
-    right: 26px;
-    bottom: 24px;
+    position: relative;
     z-index: 4;
+    padding: 0 26px 64px 84px;
+}
+
+.rail + .rail {
+    margin-top: 12px;
 }
 
 .rail-label {
@@ -622,6 +887,7 @@ body {
     width: 184px;
     margin-right: 24px;
     scroll-margin: 26px;
+    transition: transform var(--motion-fast) var(--ease-arrive);
 }
 
 .card:last-child {
@@ -820,6 +1086,12 @@ body {
 
 #screen-detail {
     padding: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+#screen-detail::-webkit-scrollbar {
+    width: 0;
 }
 
 .detail {
@@ -1016,6 +1288,233 @@ body {
     margin-top: 34px;
 }
 
+.detail-series {
+    height: auto;
+    min-height: 100%;
+}
+
+.detail-series .detail-bg,
+.detail-series .detail-lift,
+.detail-series .detail-veil {
+    bottom: auto;
+    height: 800px;
+}
+
+.detail-series .detail-body {
+    height: auto;
+    min-height: 660px;
+    padding-top: 150px;
+    padding-bottom: 70px;
+}
+
+.detail-series .detail-poster {
+    flex-basis: 260px;
+    width: 260px;
+    height: 390px;
+}
+
+.detail-actions,
+.detail-seasons,
+.detail-pages {
+    display: flex;
+    align-items: center;
+}
+
+.detail-actions .button,
+.detail-seasons .button,
+.detail-pages .button {
+    margin-right: 18px;
+}
+
+.detail-episodes {
+    position: relative;
+    padding: 0 140px 80px;
+}
+
+.detail-episodes h2 {
+    font-size: 36px;
+    margin: 0 0 24px;
+}
+
+.detail-seasons {
+    overflow-x: auto;
+    padding: 8px;
+    margin: -8px;
+}
+
+.detail-seasons .button {
+    flex-shrink: 0;
+}
+
+.detail-seasons .selected {
+    border-color: #a5b2cc;
+    background: #252d3e;
+}
+
+.detail-season-summary {
+    color: #b6b6c3;
+    font-size: 22px;
+    margin: 28px 0 20px;
+}
+
+.episode-row {
+    display: flex;
+    align-items: stretch;
+    margin-bottom: 14px;
+}
+
+.episode-play {
+    display: flex;
+    align-items: center;
+    flex: 1;
+    min-width: 0;
+    padding: 24px 28px;
+    border: 2px solid #272730;
+    border-radius: 16px;
+    color: #f4f4fa;
+    background: #14141b;
+    text-align: left;
+    font: inherit;
+    cursor: pointer;
+}
+
+/*
+ * An episode row is 1640px wide, so scaling it would blur its title into the panel's integer raster and
+ * sliding it would leave the copies button behind. Colour was the alternative, and it is worse: every
+ * interpolated frame of a background this size is a fresh raster of the whole row, which on the panel
+ * lands a good half second after the white outline — an outline cannot interpolate, so it arrives with
+ * the state and leaves the fill walking in late. Nothing here animates, and the whole state arrives
+ * together.
+ */
+.episode-play.focused,
+.detail-copy-option.focused {
+    border-color: #ffffff;
+    background: #30303d;
+    outline: 2px solid #ffffff;
+    outline-offset: 2px;
+}
+
+.episode-number {
+    width: 72px;
+    flex-shrink: 0;
+    font-size: 30px;
+    color: #babaca;
+}
+
+.episode-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.episode-title,
+.episode-meta,
+.episode-state,
+.episode-progress,
+.episode-progress-fill,
+.detail-copy-name,
+.detail-copy-meta {
+    display: block;
+}
+
+.episode-title {
+    font-size: 26px;
+    font-weight: 600;
+}
+
+.episode-meta,
+.detail-copy-meta {
+    font-size: 20px;
+    color: #b6b6c3;
+    margin-top: 8px;
+}
+
+.episode-ending {
+    margin-left: 28px;
+    text-align: right;
+    font-size: 21px;
+    line-height: 1.6;
+    color: #d8d8e5;
+}
+
+.episode-progress {
+    width: 240px;
+    height: 4px;
+    margin-top: 14px;
+    background: #454553;
+}
+
+.episode-progress-fill {
+    height: 100%;
+    background: #a5b2cc;
+}
+
+.episode-copies {
+    align-self: center;
+    margin-left: 18px;
+}
+
+.detail-pages {
+    margin-top: 28px;
+}
+
+.detail-page-count {
+    font-size: 22px;
+    color: #b6b6c3;
+    margin-right: 24px;
+}
+
+.detail-copy-backdrop {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 40;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.8);
+    /* A whole screen of one flat colour is the cheapest thing this panel can fade. */
+    animation: arc-fade var(--motion-fast) ease-out;
+}
+
+.detail-copy-sheet {
+    width: 1160px;
+    max-height: 780px;
+    overflow-y: auto;
+    padding: 40px;
+    border-radius: 24px;
+    background: #14141b;
+    animation: arc-settle var(--motion-std) var(--ease-arrive) backwards;
+}
+
+.detail-copy-sheet h2 {
+    font-size: 34px;
+    margin: 0 0 12px;
+}
+
+.detail-copy-note {
+    font-size: 22px;
+    color: #b6b6c3;
+    margin-bottom: 26px;
+}
+
+.detail-copy-option {
+    display: block;
+    width: 100%;
+    padding: 24px;
+    margin-bottom: 16px;
+    border: 2px solid #343440;
+    border-radius: 14px;
+    background: #202029;
+    color: #f4f4fa;
+    font: inherit;
+    font-size: 24px;
+    text-align: left;
+    overflow-wrap: break-word;
+    cursor: pointer;
+}
+
 /* ---------- transient states ---------- */
 
 .loading {
@@ -1063,18 +1562,190 @@ body {
     object-fit: contain;
 }
 
+#player-loading {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#player-layer.is-opening #player-loading {
+    background: #08080a;
+}
+
+#player-backdrop,
+.player-loading-dim {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+}
+
+#player-backdrop img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.player-loading-dim {
+    background: rgba(0, 0, 0, 0.68);
+}
+
+.player-loading-content {
+    position: relative;
+    width: 1100px;
+    text-align: center;
+}
+
+/*
+ * Only while the player is still opening, which is the one moment the loader owns an opaque screen.
+ * From the first advancing tick onwards the same overlay stands over a live picture — a mid-film
+ * stall, for instance — and rule two of this file says nothing moves there. So a stall announces
+ * itself plainly, exactly as it always did.
+ */
+#player-layer.is-opening .player-loading-content {
+    animation: arc-settle var(--motion-slow) var(--ease-arrive) backwards;
+}
+
+/*
+ * The wordmark is appended once its bytes have arrived, which replaces the typed title mid-screen.
+ * It fades in over the opening rather than cutting the name out from under the viewer.
+ */
+#player-layer.is-opening #player-logo img {
+    animation: arc-fade var(--motion-std) ease-out;
+}
+
+#player-logo img {
+    display: block;
+    max-width: 760px;
+    max-height: 220px;
+    margin: 0 auto;
+    object-fit: contain;
+}
+
+#player-work-title {
+    font-size: 54px;
+    font-weight: 600;
+    line-height: 1.2;
+    overflow-wrap: break-word;
+}
+
+.player-spinner {
+    width: 30px;
+    height: 30px;
+    margin: 34px auto 22px;
+    border: 3px solid rgba(255, 255, 255, 0.22);
+    border-top-color: #ffffff;
+    border-radius: 50%;
+    animation: player-spin 0.9s linear infinite;
+}
+
+@keyframes player-spin {
+    to { transform: rotate(360deg); }
+}
+
+#player-loading-message {
+    max-width: 880px;
+    margin: 0 auto;
+    font-size: 23px;
+    line-height: 1.5;
+    color: #dedee6;
+    overflow-wrap: break-word;
+}
+
+#player-error-back {
+    margin-top: 22px;
+    font-size: 24px;
+    color: #ffffff;
+}
+
+#player-layer.has-error .player-spinner {
+    display: none;
+}
+
+#player-layer.has-error #player-loading-message {
+    margin-top: 34px;
+}
+
 #player-ui {
     position: absolute;
     top: 0;
     left: 0;
     right: 0;
     bottom: 0;
+    z-index: 3;
     pointer-events: none;
-    transition: opacity 0.3s ease;
 }
 
 #player-ui.faded {
-    opacity: 0;
+    visibility: hidden;
+}
+
+#player-layer.is-loading #player-title,
+#player-layer.is-loading #player-bottom,
+#player-layer.is-loading #player-sheet {
+    visibility: hidden;
+}
+
+#player-layer.is-loading #player-top {
+    background: none;
+}
+
+#player-back {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    margin-right: 30px;
+    padding: 12px 18px;
+    border: 2px solid transparent;
+    border-radius: 10px;
+    font: inherit;
+    font-size: 23px;
+    background: rgba(0, 0, 0, 0.5);
+    color: #ffffff;
+    cursor: pointer;
+    pointer-events: auto;
+}
+
+#player-back svg {
+    width: 30px;
+    height: 30px;
+    margin-right: 10px;
+}
+
+#player-back:focus {
+    outline: none;
+    border-color: #ffffff;
+}
+
+#player-context {
+    position: absolute;
+    right: 84px;
+    bottom: 290px;
+    z-index: 4;
+    padding: 18px 28px;
+    border: 2px solid rgba(255, 255, 255, 0.4);
+    border-radius: 999px;
+    background: #1b1c23;
+    color: #ffffff;
+    font: inherit;
+    font-size: 24px;
+    cursor: pointer;
+}
+
+#player-context.focused,
+#player-context:focus {
+    outline: none;
+    border-color: #ffffff;
+    background: #ffffff;
+    color: #08080a;
 }
 
 #player-top {
@@ -1082,6 +1753,8 @@ body {
     top: 0;
     left: 0;
     right: 0;
+    display: flex;
+    align-items: center;
     padding: 60px 84px 110px;
     background: linear-gradient(to bottom, rgba(0, 0, 0, 0.82), rgba(0, 0, 0, 0));
 }
@@ -1090,7 +1763,9 @@ body {
     font-size: 36px;
     font-weight: 600;
     letter-spacing: -0.3px;
-    text-shadow: 0 2px 14px rgba(0, 0, 0, 0.75);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 #player-bottom {
@@ -1143,7 +1818,6 @@ body {
     margin-top: -7px;
     border-radius: 50%;
     background: #ffffff;
-    box-shadow: 0 0 12px rgba(0, 0, 0, 0.6);
 }
 
 #player-times {
@@ -1161,6 +1835,12 @@ body {
     letter-spacing: 0.5px;
 }
 
+/*
+ * Nothing below this line animates, on purpose. The chrome and the track sheet are drawn over a
+ * frame the decoder is still producing, and an animated layer on top of that surface is how a
+ * television starts dropping the picture instead of the menu. Their focus states flip instantly, and
+ * `.player-sheet` centres itself with a transform that no animation may touch.
+ */
 #player-controls {
     display: flex;
     align-items: center;
@@ -1180,8 +1860,11 @@ body {
     border: 2px solid rgba(255, 255, 255, 0.2);
     background: rgba(14, 17, 26, 0.82);
     color: #f7f8fc;
-    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
-    transition: transform 0.14s ease, background 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+    box-sizing: border-box;
+    padding: 0;
+    font: inherit;
+    cursor: pointer;
+    outline: none;
 }
 
 .player-control svg {
@@ -1190,12 +1873,11 @@ body {
     height: 40px;
 }
 
-.player-control.focused {
+.player-control.focused,
+.player-control:focus {
     background: #ffffff;
     border-color: #ffffff;
     color: #07080d;
-    transform: scale(1.07);
-    box-shadow: 0 14px 38px rgba(0, 0, 0, 0.48);
 }
 
 .player-control.disabled {
@@ -1212,7 +1894,6 @@ body {
     border-radius: 28px;
     border: 1px solid rgba(255, 255, 255, 0.14);
     background: rgba(8, 10, 16, 0.95);
-    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.68);
     transform: translateX(-50%);
     pointer-events: auto;
     overflow: hidden;
@@ -1239,14 +1920,22 @@ body {
 }
 
 .player-sheet-options {
+    position: relative;
     max-height: 390px;
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
 }
 
 .player-option {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    width: 100%;
+    box-sizing: border-box;
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+    outline: none;
     min-height: 72px;
     margin-bottom: 10px;
     padding: 0 24px;
@@ -1257,19 +1946,23 @@ body {
     font-size: 24px;
 }
 
-.player-option.focused {
+.player-option.focused,
+.player-option:focus {
     background: #ffffff;
     border-color: #ffffff;
     color: #07080d;
 }
 
 .player-option-label {
+    flex: 1;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
 .player-option-meta {
+    flex-shrink: 0;
     margin-left: 24px;
     color: #9aa0b5;
     font-size: 20px;

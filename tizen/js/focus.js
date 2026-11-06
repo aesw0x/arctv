@@ -1,9 +1,9 @@
 /*
  * Focus management for a D-pad.
  *
- * The interface is a stack of horizontal regions — a hero with its buttons, then a poster rail.
- * Left/right moves inside the current region; up/down crosses to the neighbouring one, keeping
- * the column where it can and clamping where it cannot. A single-region screen (pairing, the
+ * The interface is a stack of horizontal regions — a hero with its buttons, then a rail of posters
+ * per row. Left/right moves inside the current region; up/down crosses to the neighbouring one,
+ * keeping the column where it can and clamping where it cannot. A single-region screen (pairing, the
  * film page) is just a stack of one.
  *
  * Written for Chromium M76: no optional chaining, no nullish coalescing.
@@ -16,53 +16,71 @@
     function region() { return state.regions[state.row]; }
 
     /**
-     * Scroll just enough to bring `el` into view, inside whichever ancestor actually scrolls.
+     * The nearest ancestor that actually scrolls on one axis.
+     *
+     * Split by axis because the shelf is a page that scrolls upwards holding rows that scroll
+     * sideways: the rail answers for x and the screen answers for y. One search that stopped at the
+     * first scrolling ancestor would find the rail and never the page, so the rows below the fold
+     * could not be reached.
+     */
+    function scrollerFor(el, axis) {
+        var property = axis === 'x' ? 'overflowX' : 'overflowY';
+        var node = el.parentNode;
+        while (node && node.nodeType === 1) {
+            var value = window.getComputedStyle(node)[property];
+            if (value === 'auto' || value === 'scroll') { return node; }
+            node = node.parentNode;
+        }
+        return null;
+    }
+
+    function scaleOf(box, frame) {
+        var scale = frame.width / box.offsetWidth;
+        return scale && isFinite(scale) ? scale : 1;
+    }
+
+    /**
+     * Scroll `box` just enough to bring `rect` — measured before anything moved — into view.
      *
      * `scrollIntoView` is not usable here: it also scrolls ancestors that merely have
      * `overflow: hidden`, which drags the rail's heading sideways. So the scroll is computed by
      * hand, and divided by the stage scale so it stays correct in the desktop preview where the
      * whole 1920×1080 canvas is scaled down.
      */
-    function scrollerFor(el) {
-        var node = el.parentNode;
-        while (node && node.nodeType === 1) {
-            var style = window.getComputedStyle(node);
-            var x = style.overflowX;
-            var y = style.overflowY;
-            if (x === 'auto' || x === 'scroll' || y === 'auto' || y === 'scroll') { return node; }
-            node = node.parentNode;
-        }
-        return null;
-    }
-
-    function reveal(el) {
-        var box = scrollerFor(el);
+    function revealIn(box, rect, horizontal) {
         if (!box) { return; }
-
-        var rect = el.getBoundingClientRect();
         var frame = box.getBoundingClientRect();
-        var scale = frame.width / box.offsetWidth;
-        if (!scale || !isFinite(scale)) { scale = 1; }
+        var scale = scaleOf(box, frame);
 
-        // A generous side margin so the neighbouring cards peek in at the rail's edges.
-        var padX = 90 * scale;
-        var padY = 40 * scale;
-
-        if (box.scrollWidth > box.clientWidth + 1) {
+        if (horizontal) {
+            if (box.scrollWidth <= box.clientWidth + 1) { return; }
+            // A generous side margin so the neighbouring cards peek in at the rail's edges.
+            var padX = 90 * scale;
             if (rect.left < frame.left + padX) {
                 box.scrollLeft -= (frame.left + padX - rect.left) / scale;
             } else if (rect.right > frame.right - padX) {
                 box.scrollLeft += (rect.right - (frame.right - padX)) / scale;
             }
+            return;
         }
 
-        if (box.scrollHeight > box.clientHeight + 1) {
-            if (rect.top < frame.top + padY) {
-                box.scrollTop -= (frame.top + padY - rect.top) / scale;
-            } else if (rect.bottom > frame.bottom - padY) {
-                box.scrollTop += (rect.bottom - (frame.bottom - padY)) / scale;
-            }
+        if (box.scrollHeight <= box.clientHeight + 1) { return; }
+        // The top margin clears the pinned bar over the shelf; the bottom one leaves a hint of the
+        // next row, so it reads as a page that continues rather than one that ends.
+        var padTop = 132 * scale;
+        var padBottom = 40 * scale;
+        if (rect.top < frame.top + padTop) {
+            box.scrollTop -= (frame.top + padTop - rect.top) / scale;
+        } else if (rect.bottom > frame.bottom - padBottom) {
+            box.scrollTop += (rect.bottom - (frame.bottom - padBottom)) / scale;
         }
+    }
+
+    function reveal(el) {
+        // Measured once per axis: the sideways scroll moves the rectangle, and the vertical pass has
+        // to know where the card ended up afterwards.
+        revealIn(scrollerFor(el, 'x'), el.getBoundingClientRect(), true);
+        revealIn(scrollerFor(el, 'y'), el.getBoundingClientRect(), false);
     }
 
     function apply() {

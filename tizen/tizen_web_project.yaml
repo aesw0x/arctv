@@ -39,6 +39,8 @@ files:
   - js/pairing.js
   - js/perf.js
   - js/player.js
+  - js/platform.js
+  - js/splash.js
   - js/ui.js
 
 # list of files to exclude based on the matched patterns

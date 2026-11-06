@@ -42,6 +42,7 @@
         dpr: global.devicePixelRatio,
         screenW: global.screen && global.screen.width,
         screenH: global.screen && global.screen.height,
+        platform: global.Platform && global.Platform.kind,
         tizen: global.tizen ? String(global.tizen.version || 'yes') : 'no',
         avplay: !!(global.webapis && global.webapis.avplay)
     });
@@ -120,7 +121,7 @@
 
     // Capture phase, so this fires before the app's own listener: the moment the key reached the page.
     global.document.addEventListener('keydown', function (event) {
-        var interesting = [13, 37, 38, 39, 40, 10009, 10252];
+        var interesting = [13, 37, 38, 39, 40, 10009, 461, 10252];
         if (interesting.indexOf(event.keyCode) < 0) { return; }
 
         arrived = now();

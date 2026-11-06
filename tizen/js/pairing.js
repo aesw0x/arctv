@@ -60,7 +60,7 @@
                     'Open Arc Player on your phone, on the same Wi-Fi as this TV.';
                 var retry = UI.el('button', 'button', 'Search again');
                 retry.addEventListener('click', function () { scan(); });
-                list.appendChild(retry);
+                list.appendChild(UI.arrive(retry, 0));
                 Focus.set([{ el: retry, onSelect: scan }], { columns: 1 });
                 return;
             }
@@ -71,7 +71,7 @@
                 : 'Found ' + found.length + ' devices. Choose one.';
 
             var items = [];
-            found.forEach(function (device) {
+            found.forEach(function (device, index) {
                 var row = UI.el('div', 'device-row');
                 row.appendChild(UI.el('div', 'device-icon'));
 
@@ -84,7 +84,9 @@
                 row.appendChild(UI.el('div', 'device-chevron', '\u203A'));
 
                 row.addEventListener('click', function () { choose(device); });
-                list.appendChild(row);
+                // The list is what the scan was waiting for, so it is the thing that arrives; the
+                // heading above it has been on screen the whole time and must not move.
+                list.appendChild(UI.arrive(row, index, { each: 55 }));
                 items.push({ el: row, device: device, onSelect: function () { choose(device); } });
             });
 
@@ -115,6 +117,9 @@
 
             ArcTV.requestPairing(device.host, 'TV').then(function (result) {
                 codeBox.textContent = result.code;
+                // The dots held the shape of a code for as long as the phone had not answered; the
+                // digits that replace it land, rather than appearing mid-frame.
+                codeBox.classList.add('arrive-settle');
                 poll(device.host, codeBox.textContent, subtitle, hint, label);
             }).catch(function () {
                 subtitle.textContent = label + ' did not answer.';

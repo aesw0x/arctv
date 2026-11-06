@@ -10,6 +10,20 @@
 
 <div id="stage">
 
+    <div id="splash" aria-hidden="true">
+        <svg id="splash-mark" viewBox="-1 -1 26 26" aria-hidden="true" focusable="false">
+            <g class="splash-body">
+                <path class="splash-board" pathLength="1" d="M3.5 10.5H17.9118C19.3676 10.5 20.0955 10.5 20.5477 10.9393C21 11.3787 21 12.0858 21 13.5V15C21 18.2998 21 19.9497 19.9447 20.9749C18.8894 22 17.191 22 13.7941 22H10.7059C7.309 22 5.61055 22 4.55528 20.9749C3.5 19.9497 3.5 18.2998 3.5 15V10.5Z"/>
+                <path class="splash-slate" pathLength="1" d="M8 18H11"/>
+                <g class="splash-arm">
+                    <path class="splash-arm-ink" pathLength="1" d="M3.49827 10.5C3.14118 9.14207 2.96264 8.46311 3.00654 7.86611C3.08518 6.79682 3.63742 5.82221 4.50691 5.21816C4.99236 4.88092 5.6587 4.69899 6.99138 4.33514L14.7321 2.22172C15.0767 2.12763 15.2491 2.08058 15.3977 2.05386C17.0504 1.75694 18.6737 2.71192 19.2477 4.31874C19.2993 4.4633 19.3455 4.63888 19.4378 4.99006C19.4642 5.09039 19.4774 5.14056 19.4849 5.18385C19.5682 5.66498 19.3004 6.13757 18.8498 6.30467C18.8093 6.3197 18.7601 6.33314 18.6616 6.36003L3.49827 10.5Z"/>
+                    <path class="splash-hatch-left" pathLength="1" d="M7 10L9 4"/>
+                    <path class="splash-hatch-right" pathLength="1" d="M14 8L16 2"/>
+                </g>
+            </g>
+        </svg>
+    </div>
+
     <div id="app">
 
         <section id="screen-pairing" class="screen"></section>
@@ -24,8 +38,26 @@
         <object id="av-player" type="application/avplayer"></object>
         <video id="html-player" class="hidden" playsinline></video>
 
+        <div id="player-loading" class="hidden" role="status" aria-live="polite">
+            <div id="player-backdrop" aria-hidden="true"></div>
+            <div class="player-loading-dim"></div>
+            <div class="player-loading-content">
+                <div id="player-logo" class="hidden"></div>
+                <div id="player-work-title"></div>
+                <div class="player-spinner" aria-hidden="true"></div>
+                <div id="player-loading-message"></div>
+                <div id="player-error-back" class="hidden">Press Back to return.</div>
+            </div>
+        </div>
+
+        <button id="player-context" type="button" class="hidden" tabindex="-1"></button>
+
         <div id="player-ui">
             <div id="player-top">
+                <button id="player-back" type="button" aria-label="Close player (Back)" tabindex="-1">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false"><path stroke-linecap="round" stroke-linejoin="round" d="M14 5L7 12L14 19M7 12H21"/></svg>
+                    <span>Back</span>
+                </button>
                 <span id="player-title"></span>
             </div>
             <div id="player-bottom">
@@ -48,17 +80,19 @@
                     <div id="player-sheet-title" class="player-sheet-title"></div>
                     <div class="player-sheet-note">Use the remote to choose · Back closes</div>
                 </div>
-                <div id="player-sheet-options"></div>
+                <div id="player-sheet-options" class="player-sheet-options"></div>
             </div>
         </div>
     </div>
 
 </div>
 
+<script src="js/platform.js"></script>
 <script src="js/fit.js"></script>
 <script src="js/api.js"></script>
 <script src="js/ui.js"></script>
 <script src="js/focus.js"></script>
+<script src="js/splash.js"></script>
 <script src="js/pairing.js"></script>
 <script src="js/library.js"></script>
 <script src="js/detail.js"></script>

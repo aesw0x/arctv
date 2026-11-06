@@ -2,7 +2,8 @@
 
 Contract between **Arc Player** (phone, server) and the **ArcTV** Tizen app (TV, client).
 
-Version `1` — bump on breaking change; both sides reject unknown majors.
+Version `2` — bump on breaking change; both sides reject unknown majors. Version 2 changed the shape of
+`/api/library` from files to works, with no compatibility field left behind.
 
 ---
 
@@ -79,7 +80,7 @@ Unauthenticated.
 ```json
 {
   "service": "arcplayer",
-  "version": 1,
+  "version": 2,
   "device": "Pixel 8",
   "pairing": "open"
 }
@@ -203,59 +204,137 @@ it is a shortcut for people who would rather scan than click. The TV must work w
 
 ### 4.1 `GET /api/library?k=TOKEN`
 
+The shelf answers with **works**, not files. Two uploads of one film and ninety episodes of one show are
+one card each, and the files live under it in `items` — a TV that draws one card per file shows nine
+identical posters for one series, which is what version 1 invited it to do.
+
+The phone builds this response from its library and cached metadata only: `/api/library` never fetches
+from the catalogue. Season names and episode stills are not persisted, so neither is exposed.
+
 ```json
 {
-  "version": 1,
+  "version": 2,
   "generatedAt": 1761955200000,
-  "items": [
+  "groups": [
     {
-      "id": "-3217499465312568008",
-      "fileName": "Blade.Runner.2049.2017.2160p.HDR10.x265.DTS-HD.MA.5.1-ETHEL.mkv",
-      "title": "Blade Runner 2049",
-      "subtitle": null,
-      "year": 2017,
-      "overview": "A young blade runner unearths a long-buried secret.",
-      "genres": ["Sci-Fi", "Drama", "Mystery"],
-      "posterUrl": "/artwork/-3217499465312568008/poster?k=9f3a...c1",
-      "backdropUrl": "/artwork/-3217499465312568008/backdrop?k=9f3a...c1",
-      "sizeBytes": 2147483648,
-      "durationMs": 9780000,
-      "width": 1920,
-      "height": 1080,
-      "mimeType": "video/x-matroska",
-      "resumeMs": 4215000,
-      "bitrateMbps": 1.76,
-      "audioCodec": "dts-hd",
-      "needsRemux": true
+      "key": "s:the_rookie",
+      "isSeries": true,
+      "title": "The Rookie",
+      "year": 2018,
+      "overview": "A 40-year-old gives up his construction business to become the oldest rookie in the LAPD.",
+      "genres": ["Crime", "Drama", "Action"],
+      "posterUrl": "/artwork/-3217499465312568105/poster?k=9f3a...c1",
+      "backdropUrl": "/artwork/-3217499465312568105/backdrop?k=9f3a...c1",
+      "logoUrl": null,
+      "partCount": 6,
+      "seasonCount": 2,
+      "watchedAtMs": 1761951600000,
+      "playId": "-3217499465312568105",
+      "playResumeMs": 1200000,
+      "resumeId": "-3217499465312568105",
+      "resumeMs": 1200000,
+      "resumeLengthMs": 2580000,
+      "episodes": [
+        {
+          "season": 5,
+          "episode": 1,
+          "playId": "-3217499465312568105",
+          "resumeMs": 1200000,
+          "durationMs": 2580000,
+          "watched": false,
+          "copyIds": ["-3217499465312568105"]
+        }
+      ],
+      "items": [
+        {
+          "id": "-3217499465312568105",
+          "fileName": "The.Rookie.S05E01.1080p.WEB-DL.AAC2.0.x264-FLUX.mkv",
+          "season": 5,
+          "episode": 1,
+          "sizeBytes": 2147483648,
+          "durationMs": 2580000,
+          "introEndMs": null,
+          "outroStartMs": null,
+          "outroEndMs": null,
+          "width": 1920,
+          "height": 1080,
+          "mimeType": "video/x-matroska",
+          "resumeMs": 1200000,
+          "watchedAtMs": 1761951600000,
+          "bitrateMbps": 6.66,
+          "audioCodec": "aac",
+          "needsRemux": false,
+          "source": "local"
+        }
+      ]
     }
   ]
 }
 ```
 
+**The work** — what a card shows. Nothing here belongs to a single set of bytes.
+
 | Field | Notes |
 |---|---|
-| `id` | Negative `stableId` as a **string**. A JavaScript `Number` rounds anything past 2^53, and a rounded id is a 404 no log on the phone explains. Send it quoted. |
+| `key` | The phone's own group key. Stable for a card while the phone holds it, so this — not an id — is what a TV uses to put focus back on the card it left |
+| `isSeries` | A run of parts rather than one film |
+| `title` | The matched catalogue title of whichever copy has one. Never a file name: `"The Rookie · Episode 4"` names a *part*, and a part belongs under a card, not on it |
+| `year`, `overview`, `genres` | From the same catalogue match; `null` / empty when the phone never matched any copy |
+| `posterUrl`, `backdropUrl` | One picture for the whole work, named by whichever copy holds it, because an episode borrows its show's art. Either may be `null`; the TV falls back to a title card |
+| `logoUrl` | Authenticated `/artwork/{id}/logo?k=TOKEN` string, or `null` when no known card logo is available; raster only (§4.2), with title text as fallback |
+| `episodes` | Episode rows below, one per season/episode rather than upload, ordered numerically by season then episode; `[]` for films |
+| `partCount` | Distinct parts — copies of one part count once |
+| `seasonCount` | Distinct seasons; `1` for a film |
+| `watchedAtMs` | The newest stamp across its parts, and the only honest way to rank a hero: ranking by resume position picked whichever file was simply longest |
+| `playId` | The file a Play button opens. This is the phone's own `PlayOrder` verdict — last-watched part, best copy of it — so TV and phone agree without the TV choosing |
+| `playResumeMs` | Where Play picks up; for a series, the chosen episode row's deepest resume across copies. `0` when no bookmark remains |
+| `resumeId` | The unfinished part, or `null` when nothing is half-watched. May name a different file than `playId`, and is what a progress bar on the card is drawn against |
+| `resumeMs`, `resumeLengthMs` | That part's position and length, both `0` when `resumeId` is `null` |
+
+**An episode** (`episodes[]`) — a playable slot, not a file. Work Play uses the same default copy for
+its chosen episode. Rows reflect current progress after POSTs, not just the initial library snapshot.
+
+| Field | Type | Notes |
+|---|---|---|
+| `season`, `episode` | number | Numeric ordering includes specials (`season: 0`); a missing season becomes `1` |
+| `playId` | string | Saved copy first, otherwise most recently watched copy, otherwise first in the quality-sorted slot |
+| `resumeMs` | number | Deepest resume across copies, filtered by the phone's `PlayOrder` (the final 90 seconds are not offered) |
+| `durationMs` | number | Default copy's duration, falling back to the longest known copy; `0` if unknown |
+| `watched` | boolean | The phone's `PlayOrder.standing` verdict using resume and explicit finished stamps; never inferred from recency (`watchedAtMs`) |
+| `copyIds` | string[] | All copies of this episode in quality order, for the copy chooser; each refers to an `items[]` id |
+
+**A part** (`items[]`) — one file, and every fact about bytes lives here.
+
+| Field | Notes |
+|---|---|
+| `id` | Negative `stableId` as a **string**, at both levels. A JavaScript `Number` rounds anything past 2^53, and a rounded id is a 404 no log on the phone explains. Send it quoted |
 | `fileName` | The copy's own name on the phone. `audioCodec` is read out of it, so this is the one field that lets a viewer check a badge |
-| `title` | Matched catalogue title when the phone has one, else the cleaned file name |
-| `subtitle` | The line under the title: `"S02 · Episode 3"` for an episode, the year for a film, `null` when the phone never matched it |
-| `year`, `overview`, `genres` | From the same catalogue match; empty or `null` when the phone never matched the file |
+| `season`, `episode` | Off the file's own name; both `null` for a film. A TV that numbers a kicker "S05 · Episode 1" builds it from these, never from `fileName` |
 | `sizeBytes` | **Full** file size — the client relies on it for seeking |
+| `durationMs` | Duration in milliseconds; `0` if unknown |
+| `introEndMs`, `outroStartMs`, `outroEndMs` | Each a number in milliseconds or `null`; the phone supplies trusted cached timings only, never guesses or catalogue fetches for the TV |
 | `audioCodec` | Lowercase short name — `dts-hd`, `truehd`, `eac3`, `ac3`, `flac`, `opus`, `aac`, `mp3` — or `null` when the file name says nothing. Never a guess |
 | `needsRemux` | `true` only when *none* of the tracks the name claims can be decoded by this TV. A `…DTS.AC3…` dual-audio rip is `false`: the panel switches to the track it can hear |
-| `resumeMs` | Where the phone left this film, from the same store its own UI reads; `0` if unwatched |
+| `resumeMs` | Where the phone left *this file*, from the same store its own UI reads; `0` if unwatched |
+| `watchedAtMs` | When this copy was last opened, on either side; `0` if never |
 | `bitrateMbps` | `sizeBytes * 8 / durationMs / 1000` — always a number, `0` when the length is unknown |
-| `posterUrl`, `backdropUrl` | Either may be `null`; the TV falls back to a title card |
+| `source` | `local` when the phone holds every byte, `telegram` when `/stream/{id}` must read the file out of the channel as it plays |
 
 `Access-Control-Allow-Origin: *`.
 
-Only films whose every byte is already on the phone appear. A copy the viewer has not kept is a
-streaming job, not a library entry, and the phone will not start one for a TV it is not playing.
+Every part of the shelf is offered, kept or not: a film nobody downloaded is still watchable, and the
+phone opens a cloud read session for it rather than hiding it. `items` arrives in the phone's own watch
+order, copies of one part adjacent and the copy it would play first at the front of its part.
 
 ### 4.2 `GET /artwork/{id}/{kind}?k=TOKEN`
 
-`kind` is `poster` or `backdrop`; anything else, and any id the phone does not hold, is `404`.
-The bytes are whatever the phone cached from the catalogue — a JPEG or a PNG, so the
-`Content-Type` says which. `404` → the TV draws a title card.
+`kind` is `poster`, `backdrop` or `logo`; anything else, and any id the phone does not hold, is `404`.
+All kinds require auth. The bytes are cached raster artwork — JPEG or PNG, with matching `Content-Type`.
+A logo uses only the already-known card logo source, never a catalogue lookup or a generated SVG.
+Missing/empty artwork is `404`; the TV falls back to a title card or, for a logo, title text.
+
+The mock's logo is optional `media/logo.png`: absent or empty means `logoUrl: null` and `404` from the
+logo route. It never generates or downloads a replacement.
 
 There is no `/api/poster/{id}`; an app written against that path gets a 404 for every film.
 
@@ -360,7 +439,7 @@ when it decides what to put first. Keys are strings for the same reason ids are:
 read through JavaScript rounds to the nearest multiple of two, and two films would share one
 bookmark.
 
-`/api/library` already carries each film's own `resumeMs`; this is the whole shelf at once.
+`/api/library` already carries each file's own `resumeMs`; this is the whole shelf at once.
 
 ### 6.2 `POST /api/progress?k=TOKEN`
 

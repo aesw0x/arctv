@@ -41,6 +41,9 @@ const VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.ts', '.webm', '.m4v'];
 /** code -> { state, createdAt, token } */
 const pairings = new Map();
 const resumePositions = new Map();
+const watchedStamps = new Map();
+// Completion is explicit, never inferred from a last-opened stamp.
+const finishedIds = new Set();
 
 function findMedia() {
     if (!fs.existsSync(MEDIA_DIR)) return null;
@@ -56,11 +59,26 @@ function findMedia() {
 
 const MEDIA = findMedia();
 
+/** Optional local raster only; missing or empty logos have no generated fallback. */
+function logoBytes() {
+    try {
+        const file = path.join(MEDIA_DIR, 'logo.png');
+        if (!fs.statSync(file).isFile()) { return null; }
+        const body = fs.readFileSync(file);
+        return body.length ? body : null;
+    } catch (ignored) {
+        return null;
+    }
+}
+
 /*
  * A shelf of films as the phone would report them, so a browser preview shows what the real server
  * sends rather than a subset of it. The names are release-folder names on purpose: `audioCodec` is read
  * out of the file name by both sides, and `id` is a string because a 64-bit Telegram id does not survive
  * a JavaScript number.
+ *
+ * One entry is one file, not one card: two entries sharing a title are two copies of one film, which is
+ * how the phone groups them and why the answer it serves is a work with parts under it.
  */
 const FILMS = [
     {
@@ -77,6 +95,12 @@ const FILMS = [
         id: '-3217499465312568010', fileName: 'Dune.2021.2160p.WEB-DL.DDP5.9.6.Atmos.HDR10.x265.mkv',
         title: 'Dune', year: 2021, genres: ['Sci-Fi', 'Adventure', 'Drama'],
         overview: 'Paul Atreides unites with Chani and the Fremen while seeking revenge against the conspirators who destroyed his family.'
+    },
+    // The same film a second time — a smaller copy kept for the plane. One card, two files, and the kept
+    // copy is the one the phone aims Play at.
+    {
+        id: '-3217499465312568020', fileName: 'Dune.2021.1080p.BluRay.x264.AC3-RARBG.mkv',
+        title: 'Dune', year: 2021, kept: true
     },
     {
         id: '-3217499465312568011', fileName: 'Sicario.2015.1080p.BluRay.x264.AC3-RARBG.mkv',
@@ -125,9 +149,57 @@ const FILMS = [
     }
 ];
 
-// One film starts half-watched, so the hero shows a progress bar before anything has been played.
-// It lives in the same map a POST writes, so /api/progress and /api/library never disagree.
+/*
+ * A show, as one work with every episode of it filed underneath.
+ *
+ * This is the shape the phone's grouping produces and the reason the shelf answers with works at all:
+ * six Rookie episodes (seven copies) are one card, and the parts all borrow the show's poster and
+ * synopsis. Two seasons on purpose, so the card says "2 seasons" rather than counting episodes.
+ */
+const SERIES = [
+    {
+        key: 'The Rookie', title: 'The Rookie', year: 2018, isSeries: true,
+        genres: ['Crime', 'Drama', 'Action'],
+        overview: 'A 40-year-old from a small town gives up his construction business to follow his dream of becoming the oldest rookie in the LAPD.',
+        // Stand-in for trusted cached timings, for this show's shared 120-second media only.
+        timings: { introEndMs: 10000, outroStartMs: 100000, outroEndMs: 120000 },
+        parts: [
+            { id: '-3217499465312568101', fileName: 'The.Rookie.S04E01.1080p.WEB-DL.DDP5.1.x264-NTb.mkv', season: 4, episode: 1 },
+            { id: '-3217499465312568102', fileName: 'The.Rookie.S04E02.1080p.WEB-DL.DDP5.1.x264-NTb.mkv', season: 4, episode: 2 },
+            { id: '-3217499465312568103', fileName: 'The.Rookie.S04E03.2160p.WEB-DL.DDP5.1.HDR.x265-NTb.mkv', season: 4, episode: 3 },
+            { id: '-3217499465312568104', fileName: 'The.Rookie.S04E04.1080p.WEB-DL.DTS-HD.x264-NTb.mkv', season: 4, episode: 4 },
+            { id: '-3217499465312568105', fileName: 'The.Rookie.S05E01.1080p.WEB-DL.AAC2.0.x264-FLUX.mkv', season: 5, episode: 1, kept: true },
+            { id: '-3217499465312568107', fileName: 'The.Rookie.S05E01.720p.WEB-DL.AAC2.0.x264-FLUX.mkv', season: 5, episode: 1 },
+            { id: '-3217499465312568106', fileName: 'The.Rookie.S05E02.1080p.WEB-DL.AAC2.0.x264-FLUX.mkv', season: 5, episode: 2 }
+        ]
+    },
+    {
+        key: 'Chernobyl', title: 'Chernobyl', year: 2019, isSeries: true,
+        genres: ['Drama', 'History', 'Thriller'],
+        overview: 'In April 1986, an explosion at a nuclear plant in Ukraine becomes one of the worst man-made disasters in history, and the price paid to contain it.',
+        parts: [
+            { id: '-3217499465312568111', fileName: 'Chernobyl.S01E01.1080p.AMZN.WEB-DL.DDP5.1.H.264.mkv', season: 1, episode: 1 },
+            { id: '-3217499465312568112', fileName: 'Chernobyl.S01E02.1080p.AMZN.WEB-DL.DDP5.1.H.264.mkv', season: 1, episode: 2 },
+            { id: '-3217499465312568113', fileName: 'Chernobyl.S01E03.1080p.AMZN.WEB-DL.DDP5.1.H.264.mkv', season: 1, episode: 3 },
+            { id: '-3217499465312568114', fileName: 'Chernobyl.S01E04.1080p.AMZN.WEB-DL.DDP5.1.H.264.mkv', season: 1, episode: 4 },
+            { id: '-3217499465312568115', fileName: 'Chernobyl.S01E05.1080p.AMZN.WEB-DL.DDP5.1.H.264.mkv', season: 1, episode: 5 }
+        ]
+    }
+];
+
+/*
+ * Half-watched things, so the preview opens on a shelf that already has a past: a hero that is a show
+ * rather than a film, a Continue watching rail with more than one row in it, and progress bars on the
+ * cards. These live in the same map a POST writes, so /api/progress and /api/library never disagree.
+ */
+finishedIds.add('-3217499465312568101'); // The Rookie S04E01 is known finished, with no resume.
+resumePositions.set('-3217499465312568105', 31000);
 resumePositions.set(FILMS[1].id, 42000);
+resumePositions.set('-3217499465312568112', 18000);
+watchedStamps.set('-3217499465312568105', Date.now() - 40 * 60 * 1000);
+watchedStamps.set('-3217499465312568112', Date.now() - 26 * 60 * 60 * 1000);
+watchedStamps.set(FILMS[1].id, Date.now() - 3 * 24 * 60 * 60 * 1000);
+watchedStamps.set(FILMS[0].id, Date.now() - 6 * 24 * 60 * 60 * 1000);
 
 /**
  * The codec a copy claims, and whether this TV can decode it.
@@ -188,31 +260,194 @@ function decideResume(positionMs, durationMs) {
     return 'store';
 }
 
-function library() {
+// findMedia() does not probe a duration; every copy streams the same 120-second fixture.
+const FILM_MS = 120000;
+const EPISODE_MS = 120000;
+
+/**
+ * The height a release name claims.
+ *
+ * Read off the name rather than fixed for the fixture, because that is the number the card shows under
+ * the title and the one that decides whether the film page adds a 4K chip.
+ */
+function heightOf(fileName) {
+    const match = /(480|720|1080|1440|2160)p\b/i.exec(fileName);
+    return match ? Number(match[1]) : 1080;
+}
+
+function firstOf(copies, field) {
+    for (const copy of copies) {
+        if (copy[field] !== undefined && copy[field] !== null) { return copy[field]; }
+    }
+    return null;
+}
+
+/** Copies of one part, best first: the phone prefers what it holds over what it must fetch. */
+function copyOrder(a, b) {
+    if (Boolean(a.kept) !== Boolean(b.kept)) { return a.kept ? -1 : 1; }
+    return heightOf(b.fileName) - heightOf(a.fileName);
+}
+
+const WORKS = (() => {
+    const byTitle = new Map();
+    for (const film of FILMS) {
+        if (!byTitle.has(film.title)) { byTitle.set(film.title, []); }
+        byTitle.get(film.title).push(film);
+    }
+
+    const works = [];
+    for (const [title, copies] of byTitle) {
+        works.push({
+            key: title,
+            isSeries: false,
+            title,
+            year: firstOf(copies, 'year'),
+            overview: firstOf(copies, 'overview') || '',
+            genres: firstOf(copies, 'genres') || [],
+            parts: copies.slice().sort(copyOrder)
+        });
+    }
+
+    for (const series of SERIES) {
+        works.push({
+            key: series.key,
+            isSeries: true,
+            title: series.title,
+            year: series.year,
+            overview: series.overview,
+            genres: series.genres,
+            timings: series.timings || null,
+            parts: series.parts.slice().sort(copyOrder)
+        });
+    }
+    return works;
+})();
+
+/**
+ * One file, as the TV is told about it.
+ *
+ * Every field here belongs to a single copy: the length a progress bar is drawn against, the codec the
+ * warning chip reads, the source that says whether the phone holds the bytes or must fetch them. A work
+ * has none of these of its own, which is why the shelf stopped answering with files.
+ */
+function partOf(work, seed) {
+    const audio = audioClaim(seed.fileName);
+    const height = heightOf(seed.fileName);
+    const durationMs = work.isSeries ? EPISODE_MS : FILM_MS;
     const size = MEDIA ? MEDIA.size : 0;
-    return FILMS.map((film) => {
-        const audio = audioClaim(film.fileName);
+
+    return {
+        id: seed.id,
+        fileName: seed.fileName,
+        season: seed.season === undefined ? null : seed.season,
+        episode: seed.episode === undefined ? null : seed.episode,
+        sizeBytes: size,
+        durationMs,
+        introEndMs: work.timings ? work.timings.introEndMs : null,
+        outroStartMs: work.timings ? work.timings.outroStartMs : null,
+        outroEndMs: work.timings ? work.timings.outroEndMs : null,
+        width: Math.round((height * 16) / 9),
+        height,
+        mimeType: 'video/mp4',
+        resumeMs: resumePositions.get(seed.id) || 0,
+        watchedAtMs: watchedStamps.get(seed.id) || 0,
+        bitrateMbps: size > 0 ? Number((((size * 8) / durationMs) / 1000).toFixed(2)) : 0,
+        audioCodec: audio.codec,
+        needsRemux: audio.unsupported,
+        source: seed.kept ? 'local' : 'telegram'
+    };
+}
+
+/** One row per episode, with copy choice and progress derived from the live stores. */
+function episodesOf(items) {
+    const slots = new Map();
+    for (const item of items) {
+        if (item.episode === null) { continue; }
+        const key = `${item.season ?? 1}:${item.episode}`;
+        if (!slots.has(key)) { slots.set(key, []); }
+        slots.get(key).push(item);
+    }
+    return Array.from(slots.values(), (copies) => {
+        copies.sort((a, b) => b.height - a.height);
+        // Ties (including never watched) keep the first quality-sorted copy.
+        const recent = copies.reduce((best, copy) => copy.watchedAtMs > best.watchedAtMs ? copy : best);
+        const play = copies.find((copy) => copy.source === 'local') || recent;
+        const deepest = copies.reduce((best, copy) => Math.max(best, copy.resumeMs), 0);
         return {
-            id: film.id,
-            fileName: film.fileName,
-            title: film.title,
-            subtitle: null,
-            year: film.year,
-            overview: film.overview,
-            genres: film.genres,
-            sizeBytes: size,
-            durationMs: 120000,
-            width: 1920,
-            height: 1080,
-            mimeType: 'video/mp4',
-            posterUrl: `/artwork/${film.id}/poster?k=${TOKEN}${ARTWORK_STAMP}`,
-            backdropUrl: `/artwork/${film.id}/backdrop?k=${TOKEN}${ARTWORK_STAMP}`,
-            resumeMs: resumePositions.get(film.id) || 0,
-            audioCodec: audio.codec,
-            needsRemux: audio.unsupported,
-            bitrateMbps: size > 0 ? Number(((size * 8) / 120000 / 1000).toFixed(2)) : 0
+            season: play.season ?? 1,
+            episode: play.episode,
+            playId: play.id,
+            resumeMs: decideResume(deepest, play.durationMs) === 'drop' ? 0 : deepest,
+            durationMs: play.durationMs,
+            watched: copies.some((copy) => finishedIds.has(copy.id)),
+            copyIds: copies.map((copy) => copy.id)
+        };
+    }).sort((a, b) => a.season - b.season || a.episode - b.episode);
+}
+
+/**
+ * The shelf as works, which is what the app is built against.
+ *
+ * The last unfinished part drives Play; episode choices use the same default copy and deepest resume
+ * as the episode rows, even when a POST updates a different copy. With no bookmark, shows use the last
+ * watched episode, or episode order when unstarted.
+ */
+function groups() {
+    const hasLogo = Boolean(logoBytes());
+    return WORKS.map((work) => {
+        const items = work.parts.map((seed) => partOf(work, seed));
+        const episodes = work.isSeries ? episodesOf(items) : [];
+        const choices = work.isSeries ? episodes.map((episode) => ({
+            id: episode.playId,
+            resumeMs: episode.resumeMs,
+            durationMs: episode.durationMs,
+            watchedAtMs: items.filter((item) => episode.copyIds.includes(item.id))
+                .reduce((best, item) => Math.max(best, item.watchedAtMs), 0)
+        })) : items;
+        const underway = choices.filter((item) => item.resumeMs > 0)
+            .sort((a, b) => b.watchedAtMs - a.watchedAtMs)[0] || null;
+        const play = underway || (work.isSeries
+            ? choices.slice().sort((a, b) => b.watchedAtMs - a.watchedAtMs)[0]
+            : items[0]) || items[0];
+
+        const seasons = new Set(episodes.map((episode) => episode.season));
+
+        // One picture for the whole work, named by whichever copy holds it: an episode borrows the
+        // show's poster rather than asking for art that was never filed under its own id.
+        const artwork = items[0];
+
+        return {
+            key: work.key,
+            isSeries: work.isSeries,
+            title: work.title,
+            year: work.year,
+            overview: work.overview,
+            genres: work.genres,
+            posterUrl: `/artwork/${artwork.id}/poster?k=${TOKEN}${ARTWORK_STAMP}`,
+            backdropUrl: `/artwork/${artwork.id}/backdrop?k=${TOKEN}${ARTWORK_STAMP}`,
+            logoUrl: hasLogo ? `/artwork/${artwork.id}/logo?k=${TOKEN}` : null,
+            partCount: work.isSeries ? episodes.length : 1,
+            seasonCount: work.isSeries ? seasons.size : 1,
+            watchedAtMs: items.reduce((best, item) => Math.max(best, item.watchedAtMs), 0),
+            playId: play.id,
+            playResumeMs: play.resumeMs,
+            resumeId: underway ? underway.id : null,
+            resumeMs: underway ? underway.resumeMs : 0,
+            resumeLengthMs: underway ? underway.durationMs : 0,
+            episodes,
+            items
         };
     });
+}
+
+/** The work a file belongs to, because artwork and progress are named by file but drawn by work. */
+function ownerOf(id) {
+    for (const work of WORKS) {
+        for (const part of work.parts) {
+            if (part.id === id) { return { work, part }; }
+        }
+    }
+    return null;
 }
 
 /**
@@ -458,7 +693,7 @@ const server = http.createServer((req, res) => {
     }
 
     if (url.pathname === '/api/ping') {
-        json(res, 200, { service: 'arcplayer', version: 1, device: 'Mock Phone', pairing: 'open' });
+        json(res, 200, { service: 'arcplayer', version: 2, device: 'Mock Phone', pairing: 'open' });
         return;
     }
 
@@ -500,7 +735,7 @@ const server = http.createServer((req, res) => {
 
     if (url.pathname === '/api/library') {
         if (!authorized(url, req)) { send(res, 401, ''); return; }
-        json(res, 200, { version: 1, generatedAt: Date.now(), items: library() });
+        json(res, 200, { version: 2, generatedAt: Date.now(), groups: groups() });
         return;
     }
 
@@ -508,8 +743,15 @@ const server = http.createServer((req, res) => {
         if (!authorized(url, req)) { send(res, 401, ''); return; }
         const parts = url.pathname.slice('/artwork/'.length).split('/');
         if (parts.length !== 2) { send(res, 404, ''); return; }
-        const item = library().find((entry) => entry.id === parts[0]);
-        if (!item || (parts[1] !== 'poster' && parts[1] !== 'backdrop')) { send(res, 404, ''); return; }
+        const owner = ownerOf(parts[0]);
+        if (!owner || !['poster', 'backdrop', 'logo'].includes(parts[1])) { send(res, 404, ''); return; }
+        if (parts[1] === 'logo') {
+            const body = logoBytes();
+            if (!body) { send(res, 404, ''); return; }
+            send(res, 200, req.method === 'HEAD' ? '' : body, 'image/png',
+                { 'Cache-Control': 'private, max-age=86400', 'Content-Length': body.length });
+            return;
+        }
         // Diagnostic: serve the same shape the phone does — a raster JPEG with a day of cache — so a
         // cost measured against this fixture is a cost the real device also pays.
         const raster = path.join(MEDIA_DIR, parts[1] === 'backdrop' ? 'backdrop.jpg' : 'poster.jpg');
@@ -519,7 +761,7 @@ const server = http.createServer((req, res) => {
                 { 'Cache-Control': 'private, max-age=86400', 'Content-Length': body.length });
             return;
         }
-        send(res, 200, artworkSvg(item.id, item.title, parts[1]), 'image/svg+xml');
+        send(res, 200, artworkSvg(owner.part.id, owner.work.title, parts[1]), 'image/svg+xml');
         return;
     }
 
@@ -546,13 +788,17 @@ const server = http.createServer((req, res) => {
                 const id = String(parsed.id);
                 const positionMs = Number(parsed.positionMs);
                 if (!Number.isFinite(positionMs)) { send(res, 400, 'expected a position'); return; }
-                const item = library().find((entry) => entry.id === id);
-                if (!item) { send(res, 404, ''); return; }
+                const owner = ownerOf(id);
+                if (!owner) { send(res, 404, ''); return; }
                 // The phone prefers its own length for the film and falls back to the one the TV measured.
-                const durationMs = item.durationMs > 0 ? item.durationMs : Number(parsed.durationMs) || 0;
+                const knownMs = owner.work.isSeries ? EPISODE_MS : FILM_MS;
+                const durationMs = knownMs > 0 ? knownMs : Number(parsed.durationMs) || 0;
                 const verdict = decideResume(positionMs, durationMs);
                 if (verdict === 'store') { resumePositions.set(id, positionMs); }
                 if (verdict === 'drop') { resumePositions.delete(id); }
+                // Watching anything also moves it, whichever way the position went: the shelf ranks by
+                // what was last reached, so a finished film still jumps to the top of the hero.
+                watchedStamps.set(id, Date.now());
                 console.log(`progress: ${id} -> ${positionMs} ms (${durationMs} ms film) ${verdict}`);
                 send(res, 204, '');
             });

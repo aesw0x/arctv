@@ -34,10 +34,26 @@
         return Math.round(bytes / (1024 * 1024)) + ' MB';
     }
 
+    /*
+     * Hand an element its place in an arrival queue.
+     *
+     * `cap` is a budget, not a suggestion. Every animated element needs its own layer on this panel,
+     * so the first few things on a screen glide in and everything past the cap simply appears — a
+     * shelf of forty posters is never a queue of forty half-frames.
+     */
+    function arrive(el, step, options) {
+        options = options || {};
+        if (step >= (options.cap || 8)) { return el; }
+        el.classList.add(options.kind || 'arrive');
+        el.style.animationDelay = step * (options.each || 45) + 'ms';
+        return el;
+    }
+
     global.UI = {
         el: el,
         clear: clear,
         formatTime: formatTime,
-        formatSize: formatSize
+        formatSize: formatSize,
+        arrive: arrive
     };
 })(window);

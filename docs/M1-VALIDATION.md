@@ -69,7 +69,7 @@ curl.exe -i "$base/api/ping"
 Expect `200`, `Access-Control-Allow-Origin: *`, and:
 
 ```json
-{"service":"arcplayer","version":1,"device":"…","pairing":"open"}
+{"service":"arcplayer","version":2,"device":"…","pairing":"open"}
 ```
 
 ### 4.2 Auth is actually enforced

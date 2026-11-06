@@ -245,8 +245,54 @@
     function library(host) { return requestJson(host, '/api/library'); }
 
     /**
+     * The copy this work's Play button opens.
+     *
+     * A card is a work and a work holds files: two uploads of one film, ninety of one show. The phone has
+     * already answered which of them a button should open — `playId` is its own PlayOrder verdict, the same
+     * one the app's Play uses — so a television that picked the first file it was handed would be choosing
+     * an episode for the viewer instead of resuming the one they are sitting in.
+     */
+    function playPartOf(work) {
+        if (!work) { return null; }
+        var parts = work.items || [];
+        for (var i = 0; i < parts.length; i++) {
+            if (parts[i].id === work.playId) { return parts[i]; }
+        }
+        return parts[0] || null;
+    }
+
+    /**
+     * Which part of a show a copy is, as the viewer would say it. Null for a film.
+     *
+     * Built from the numbers rather than off the file name, because the name is what an uploader typed and
+     * the card has already stopped showing that.
+     */
+    function partLabelOf(work, part) {
+        part = part || playPartOf(work);
+        if (!part || part.episode === null || part.episode === undefined) { return null; }
+        var episode = 'Episode ' + part.episode;
+        if (part.season === 0) { return 'Special · ' + episode; }
+        return part.season ? 'S' + part.season + ' · ' + episode : episode;
+    }
+
+    function partOf(work, id) {
+        for (var i = 0; i < work.items.length; i++) {
+            if (work.items[i].id === id) { return work.items[i]; }
+        }
+        return null;
+    }
+
+    function episodeOf(work, id) {
+        var episodes = work.episodes || [];
+        for (var i = 0; i < episodes.length; i++) {
+            if (episodes[i].copyIds.indexOf(id) >= 0) { return episodes[i]; }
+        }
+        return null;
+    }
+
+    /**
      * The model string the phone shows on its approval prompt, read from the set it is running on
-     * rather than baked into the app. Both sources are TV-only and absent in the browser preview.
+     * rather than baked into the app. Both sources are Tizen-only and absent everywhere else.
      */
     function deviceModel() {
         try {
@@ -261,6 +307,9 @@
             var capability = global.tizen && global.tizen.systeminfo && global.tizen.systeminfo.getCapability();
             if (capability && capability.deviceModel) { return String(capability.deviceModel); }
         } catch (ignored) { /* not a Tizen TV */ }
+
+        /* webOS gives a web app no way to name the set it is on, so the prompt gets the platform. */
+        if (global.Platform && global.Platform.kind === 'webos') { return 'LG webOS TV'; }
 
         return 'Smart TV';
     }
@@ -314,6 +363,10 @@
         discover: discover,
         base: base,
         library: library,
+        playPartOf: playPartOf,
+        partLabelOf: partLabelOf,
+        partOf: partOf,
+        episodeOf: episodeOf,
         requestPairing: requestPairing,
         pairStatus: pairStatus,
         absolute: absolute,
