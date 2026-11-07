@@ -183,10 +183,14 @@ jobs:
           if (!authorSig.includes('<X509Certificate>')) throw new Error('author-signature.xml carries no certificate.');
           collect(`wgt-out/${wgts[0]}`, `ArcTV-${version}-tizen.wgt`);
 
-          // webOS: the ipk must be a readable gzip tarball and the staged manifest must match.
+          // webOS: the ipk is an opkg `ar` archive holding control.tar.gz + data.tar.gz, and the
+          // staged manifest must carry the same version.
           const ipks = fs.readdirSync('webos/Debug').filter((f) => f.endsWith('.ipk'));
           if (ipks.length !== 1) throw new Error(`expected one .ipk, found ${ipks.length}`);
-          execFileSync('tar', ['tzf', `webos/Debug/${ipks[0]}`]);
+          const arMembers = execFileSync('ar', ['t', `webos/Debug/${ipks[0]}`], { encoding: 'utf8' }).split('\n');
+          for (const member of ['control.tar.gz', 'data.tar.gz']) {
+            if (!arMembers.includes(member)) throw new Error(`ipk is missing ${member}.`);
+          }
           const staged = JSON.parse(fs.readFileSync('webos/.build/appinfo.json', 'utf8'));
           if (staged.version !== version) throw new Error(`ipk staged version ${staged.version} != ${version}`);
           collect(`webos/Debug/${ipks[0]}`, `ArcTV-${version}-webos.ipk`);
