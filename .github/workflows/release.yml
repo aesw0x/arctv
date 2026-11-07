@@ -1,0 +1,225 @@
+name: Release TV builds
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.version.outputs.changed }}
+      name: ${{ steps.version.outputs.name }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check release version
+        id: version
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const { execFileSync, spawnSync } = require('node:child_process');
+          const readVersion = (text) => {
+            const widget = /<widget\b[^>]*>/i.exec(text);
+            const found = widget && /(?:^|\s)version="([^"]+)"/.exec(widget[0]);
+            if (!found) throw new Error('tizen/config.xml carries no widget version.');
+            return found[1];
+          };
+          const name = readVersion(fs.readFileSync('tizen/config.xml', 'utf8'));
+          if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(name)) {
+            throw new Error('The widget version must be x.y.z.');
+          }
+          let changed = true;
+          const before = process.env.BEFORE_SHA;
+          if (process.env.EVENT_NAME === 'push' && before && !/^0+$/.test(before)) {
+            const old = spawnSync('git', ['show', `${before}:tizen/config.xml`], { encoding: 'utf8' });
+            if (old.status === 0) {
+              changed = readVersion(old.stdout) !== name;
+            } else if (spawnSync('git', ['cat-file', '-e', `${before}^{commit}`]).status !== 0) {
+              throw new Error('The previous push commit is unavailable; cannot compare versions safely.');
+            }
+          }
+          const tags = execFileSync('git', ['tag', '--list', `v${name}`], { encoding: 'utf8' }).trim();
+          if (tags) changed = false;
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `changed=${changed}\nname=${name}\n`);
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            changed ? `Building ArcTV ${name} for all three platforms.\n` : `No unreleased version change: ${name}.\n`);
+          NODE
+
+  release:
+    needs: version
+    if: needs.version.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Build and sign the Tizen .wgt
+        env:
+          TZ_AUTHOR_P12_BASE64: ${{ secrets.TZ_AUTHOR_P12_BASE64 }}
+          TZ_AUTHOR_PASSWORD: ${{ secrets.TZ_AUTHOR_PASSWORD }}
+          TZ_DIST_P12_BASE64: ${{ secrets.TZ_DIST_P12_BASE64 }}
+          TZ_DIST_PASSWORD: ${{ secrets.TZ_DIST_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for key in TZ_AUTHOR_P12_BASE64 TZ_AUTHOR_PASSWORD TZ_DIST_P12_BASE64 TZ_DIST_PASSWORD; do
+            if [ -z "${!key}" ]; then
+              printf '::error::Missing repository secret: %s\n' "$key"
+              exit 1
+            fi
+          done
+          STUDIO="$HOME/tizen-studio"
+          INSTALLER=/tmp/web-cli.bin
+          URL_PATH="sdk/Installer/tizen-studio_6.1/web-cli_Tizen_Studio_6.1_ubuntu-64.bin"
+          wget -q "https://download.tizen.org/$URL_PATH" -O "$INSTALLER" \
+            || wget -q "http://download.tizen.org/$URL_PATH" -O "$INSTALLER"
+          chmod +x "$INSTALLER"
+          "$INSTALLER" --accept-license "$STUDIO"
+          export PATH="$STUDIO/tools/ide/bin:$PATH"
+          umask 077
+          printf '%s' "$TZ_AUTHOR_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/author.p12"
+          printf '%s' "$TZ_DIST_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/distributor.p12"
+          PROFILES_PATH="$(tizen cli-config -l | grep -i 'default.profiles.path=' | sed 's/^default\.profiles\.path=//g')"
+          cat > "$PROFILES_PATH" <<EOF
+          <?xml version="1.0" encoding="UTF-8" standalone="no"?>
+          <profiles active="arctv-release" version="3.1">
+              <profile name="arctv-release">
+                  <profileitem ca="" distributor="0" key="$RUNNER_TEMP/author.p12" password="$TZ_AUTHOR_PASSWORD" rootca=""/>
+                  <profileitem ca="" distributor="1" key="$RUNNER_TEMP/distributor.p12" password="$TZ_DIST_PASSWORD" rootca=""/>
+                  <profileitem ca="" distributor="2" key="" password="" rootca=""/>
+              </profile>
+          </profiles>
+          EOF
+          chmod a-w "$PROFILES_PATH"
+          tizen build-web -- tizen
+          mkdir -p wgt-out
+          tizen package -t wgt -s arctv-release -o wgt-out -- tizen/.buildResult
+          ls -la wgt-out
+
+      - name: Build the webOS .ipk
+        run: |
+          set -euo pipefail
+          npm install -g @webos-tools/cli
+          node webos/package.cjs
+
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        with:
+          packages: platform-tools
+      - name: Build and sign the Android TV .apk
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          RELEASE_STORE_FILE: ${{ runner.temp }}/arctv-release.jks
+        run: |
+          set -euo pipefail
+          for key in RELEASE_KEYSTORE_BASE64 RELEASE_STORE_PASSWORD RELEASE_KEY_ALIAS RELEASE_KEY_PASSWORD; do
+            if [ -z "${!key}" ]; then
+              printf '::error::Missing repository secret: %s\n' "$key"
+              exit 1
+            fi
+          done
+          sdkmanager 'platforms;android-36' 'build-tools;35.0.0'
+          umask 077
+          printf '%s' "$RELEASE_KEYSTORE_BASE64" | base64 --decode > "$RELEASE_STORE_FILE"
+          cd android-tv
+          ./gradlew --no-daemon --console=plain :app:assembleRelease
+
+      - name: Verify all three packages and collect dist
+        env:
+          RELEASE_VERSION: ${{ needs.version.outputs.name }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const crypto = require('node:crypto');
+          const { execFileSync } = require('node:child_process');
+          const version = process.env.RELEASE_VERSION;
+          const [major, minor, patch] = version.split('.').map(Number);
+          const versionCode = major * 10000 + minor * 100 + patch;
+          fs.mkdirSync('dist', { recursive: true });
+          const checksums = [];
+          const collect = (source, name) => {
+            fs.copyFileSync(source, `dist/${name}`);
+            checksums.push(`${crypto.createHash('sha256').update(fs.readFileSync(source)).digest('hex')}  ${name}`);
+            console.log(`collected ${name} (${fs.statSync(source).size} bytes)`);
+          };
+
+          // Tizen: a signed .wgt carries both signatures inside .sign/.
+          const wgts = fs.readdirSync('wgt-out').filter((f) => f.endsWith('.wgt'));
+          if (wgts.length !== 1) throw new Error(`expected one .wgt, found ${wgts.length}`);
+          const wgtEntries = execFileSync('unzip', ['-Z1', `wgt-out/${wgts[0]}`], { encoding: 'utf8' }).split('\n');
+          for (const sig of ['.sign/author-signature.xml', '.sign/distributor-signature.xml', '.sign/signature1.xml']) {
+            if (!wgtEntries.includes(sig)) throw new Error(`wgt is missing ${sig} — not properly signed.`);
+          }
+          collect(`wgt-out/${wgts[0]}`, `ArcTV-${version}-tizen.wgt`);
+
+          // webOS: the ipk must be a readable gzip tarball and the staged manifest must match.
+          const ipks = fs.readdirSync('webos/Debug').filter((f) => f.endsWith('.ipk'));
+          if (ipks.length !== 1) throw new Error(`expected one .ipk, found ${ipks.length}`);
+          execFileSync('tar', ['tzf', `webos/Debug/${ipks[0]}`]);
+          const staged = JSON.parse(fs.readFileSync('webos/.build/appinfo.json', 'utf8'));
+          if (staged.version !== version) throw new Error(`ipk staged version ${staged.version} != ${version}`);
+          collect(`webos/Debug/${ipks[0]}`, `ArcTV-${version}-webos.ipk`);
+
+          // Android TV: signature + versionName/versionCode must match the single source.
+          const apk = 'android-tv/app/build/outputs/apk/release/app-release.apk';
+          const buildTools = path.join(process.env.ANDROID_HOME, 'build-tools/35.0.0');
+          execFileSync(path.join(buildTools, 'apksigner'), ['verify', '--verbose', apk]);
+          const badging = execFileSync(path.join(buildTools, 'aapt'), ['dump', 'badging', apk], { encoding: 'utf8' });
+          if (!badging.includes(`versionName='${version}'`)) throw new Error('APK versionName mismatch.');
+          if (!badging.includes(`versionCode='${versionCode}'`)) throw new Error('APK versionCode mismatch.');
+          collect(apk, `ArcTV-${version}-androidtv.apk`);
+
+          fs.writeFileSync('dist/SHA256SUMS.txt', checksums.join('\n') + '\n');
+          NODE
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ArcTV-${{ needs.version.outputs.name }}
+          path: dist/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_VERSION: ${{ needs.version.outputs.name }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: |
+          gh release create "v$RELEASE_VERSION" dist/* \
+            --target "$RELEASE_COMMIT" \
+            --title "ArcTV $RELEASE_VERSION" \
+            --generate-notes \
+            --notes "One release, three panels: tizen.wgt for Samsung (signed, installs in place over any earlier build), webos.ipk for LG (unsigned - Dev Mode), androidtv.apk for Android TV 12+ (signed release). SHA256SUMS.txt contains download checksums."
+
+      - name: Remove signing material
+        if: always()
+        run: rm -f "$RUNNER_TEMP/author.p12" "$RUNNER_TEMP/distributor.p12" "$RUNNER_TEMP/arctv-release.jks"

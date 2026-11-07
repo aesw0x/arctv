@@ -29,3 +29,6 @@ handoff/
 node_modules/
 .DS_Store
 Thumbs.db
+
+# Local release signing for the Android TV client. Machine-only, like local.properties.
+android-tv/signing.properties

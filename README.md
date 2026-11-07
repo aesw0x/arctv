@@ -107,7 +107,8 @@ inside a device that may not let you attach a debugger.
 
 - A Samsung TV on Tizen 6.0 or later (2021 Crystal UHD and up), in developer mode; or an LG TV on
   webOS 6.0 or later (2021 and up), with Dev Mode installed from the LG Content Store.
-- Arc Player on a phone on the same Wi-Fi, with the film already downloaded.
+- Arc Player on a phone on the same Wi-Fi. Downloaded films stream straight from storage; cloud-only
+  titles are pulled from Telegram on demand while the TV plays.
 
 ## Quick start
 
@@ -156,6 +157,35 @@ node webos\package.cjs
 
 Writes `webos\Debug\com.aeswox.arcplayer.tv_<version>_all.ipk` (~42 KB). Nothing is copied by hand:
 edit `tizen\`, rebuild either package.
+
+## Releases
+
+One version number drives all three packages: the `widget` tag's `version` in `tizen/config.xml`.
+`webos/package.cjs` stamps it into `appinfo.json` at build time, and `android-tv/`'s Gradle script
+parses the same tag for `versionName` (deriving `versionCode` as `major*10000 + minor*100 + patch`).
+
+Every push to `main` that bumps that version is picked up by
+[`.github/workflows/release.yml`](.github/workflows/release.yml), which builds all three packages in
+one job and publishes them to the
+[Releases page](https://github.com/aesw0x/arctv/releases) with a `SHA256SUMS.txt`:
+
+| Asset | Platform | Signing |
+|---|---|---|
+| `ArcTV-<v>-tizen.wgt` | Samsung (Tizen 6.0+) | Signed in CI with the Tizen SDK default author + public distributor certificates — the same identity as the sideloaded builds, so a release `.wgt` installs in place over an earlier one without re-pairing |
+| `ArcTV-<v>-webos.ipk` | LG (webOS 6.0+, Dev Mode) | Unsigned, by design — Dev Mode is the trust decision |
+| `ArcTV-<v>-androidtv.apk` | Android TV 12+ (API 31) | Signed with the project's release keystore |
+
+The workflow verifies each package before publishing: both signature files present inside the
+`.wgt`, the staged `appinfo.json` version matching the `.ipk`, and `apksigner` plus
+`versionName`/`versionCode` checked against the single source for the `.apk`. A push with no bump
+builds nothing; a version whose tag already exists is never rebuilt. Because `0.4.0` predates the
+workflow, it can be published through a manual `workflow_dispatch` run.
+
+CI signing keys live in the repository's GitHub Actions secrets (`TZ_AUTHOR_P12_BASE64`,
+`TZ_AUTHOR_PASSWORD`, `TZ_DIST_P12_BASE64`, `TZ_DIST_PASSWORD`, `RELEASE_KEYSTORE_BASE64`,
+`RELEASE_STORE_PASSWORD`, `RELEASE_KEY_ALIAS`, `RELEASE_KEY_PASSWORD`). Local release builds on this
+desk read the same Android values from `android-tv/signing.properties` (git-ignored); the Tizen half
+signs through the local SDK's own profile.
 
 ## Sideloading
 
@@ -238,8 +268,14 @@ docs/
 ## Status
 
 - [x] Discovery, device list, phone-approved pairing
-- [x] Library — featured hero, poster rail, D-pad focus engine
+- [x] Library — featured hero, grouped rails (protocol v2: one card per work, series fold their
+      episodes and duplicate copies behind the title page), D-pad focus engine
 - [x] Player — AVPlay on the panel, `<video>` in a browser, full transport controls
+- [x] Cloud titles — a work the phone has not downloaded streams on demand: the phone pulls it
+      from Telegram while the TV plays, over the same `/stream/{id}` Range path
+- [x] Motion — staggered arrival, animated sheets and a skippable clapperboard intro, ported from
+      the phone's Frosted Jelly vocabulary to all three clients
+- [x] Resume — `/api/progress` carries the phone's watched position into the TV's rails and player
 - [ ] Audio track and subtitle selection, bitrate warning — written, and proven in a browser;
       the panel has not been reachable since, so nothing has been seen on the TV itself
 - [ ] Hardening: reconnects, partial files, hostile payloads
@@ -255,6 +291,8 @@ docs/
       `.mkv` plays — the last question this machine cannot answer
 - [x] Android TV: a native Compose client in `android-tv/` — pairing, shelf, title page and player,
       each walked on the emulator against the mock phone. No physical set has run it yet
+- [x] Releases: one workflow builds and signs all three packages on every version bump — see
+      [Releases](#releases)
 - [ ] Both TV clients: shelf captions. `/api/subtitles/{id}` is served by the phone and called by
       neither the web shell nor the Kotlin app, so both offer embedded tracks only
 

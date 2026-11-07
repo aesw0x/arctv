@@ -1,8 +1,25 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
+
+/*
+ * Release signing: a git-ignored signing.properties next to settings.gradle.kts for this desk, or the
+ * same four names as environment variables for CI, which has no file to keep — only repo secrets. No
+ * key anywhere means the release build stays unsigned rather than failing, exactly like the phone app.
+ */
+val signingProps = Properties().apply {
+    val f = rootProject.file("signing.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+
+fun signingValue(name: String): String =
+    signingProps.getProperty(name)?.takeIf { it.isNotBlank() }
+        ?: providers.environmentVariable(name).orNull?.takeIf { it.isNotBlank() }
+        ?: ""
 
 /*
  * The version comes from tizen/config.xml, the same file webos/package.cjs reads when it stamps an
@@ -30,18 +47,32 @@ android {
 
     defaultConfig {
         applicationId = "com.aeswox.arcplayer.tv"
-        // Android TV 12 is API 32 and a 2020-era Shield is on 30; 31 splits the difference at the
-        // same floor the phone already ships, so both halves of the pair can share a helper class.
+        // Android 12 is API 31 — the same floor the phone already ships, so both halves of the pair
+        // can share a helper class.
         minSdk = 31
         targetSdk = 35
         versionCode = versionComponent(0) * 10_000 + versionComponent(1) * 100 + versionComponent(2)
         versionName = widgetVersion
     }
 
+    signingConfigs {
+        val storePath = signingValue("RELEASE_STORE_FILE")
+        val storeFile = if (storePath.isNotBlank()) rootProject.file(storePath) else null
+        if (storeFile != null && storeFile.exists()) {
+            create("release") {
+                this.storeFile = storeFile
+                storePassword = signingValue("RELEASE_STORE_PASSWORD")
+                keyAlias = signingValue("RELEASE_KEY_ALIAS")
+                keyPassword = signingValue("RELEASE_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.findByName("release")
         }
     }
 
