@@ -171,13 +171,16 @@ jobs:
             console.log(`collected ${name} (${fs.statSync(source).size} bytes)`);
           };
 
-          // Tizen: a signed .wgt carries both signatures inside .sign/.
+          // Tizen: a signed .wgt carries author-signature.xml and signature1.xml at its root
+          // (the distributor signature lives inside signature1.xml — no separate file).
           const wgts = fs.readdirSync('wgt-out').filter((f) => f.endsWith('.wgt'));
           if (wgts.length !== 1) throw new Error(`expected one .wgt, found ${wgts.length}`);
           const wgtEntries = execFileSync('unzip', ['-Z1', `wgt-out/${wgts[0]}`], { encoding: 'utf8' }).split('\n');
-          for (const sig of ['.sign/author-signature.xml', '.sign/distributor-signature.xml', '.sign/signature1.xml']) {
+          for (const sig of ['author-signature.xml', 'signature1.xml']) {
             if (!wgtEntries.includes(sig)) throw new Error(`wgt is missing ${sig} — not properly signed.`);
           }
+          const authorSig = execFileSync('unzip', ['-p', `wgt-out/${wgts[0]}`, 'author-signature.xml'], { encoding: 'utf8' });
+          if (!authorSig.includes('<X509Certificate>')) throw new Error('author-signature.xml carries no certificate.');
           collect(`wgt-out/${wgts[0]}`, `ArcTV-${version}-tizen.wgt`);
 
           // webOS: the ipk must be a readable gzip tarball and the staged manifest must match.

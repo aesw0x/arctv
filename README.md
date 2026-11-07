@@ -175,8 +175,8 @@ one job and publishes them to the
 | `ArcTV-<v>-webos.ipk` | LG (webOS 6.0+, Dev Mode) | Unsigned, by design — Dev Mode is the trust decision |
 | `ArcTV-<v>-androidtv.apk` | Android TV 12+ (API 31) | Signed with the project's release keystore |
 
-The workflow verifies each package before publishing: both signature files present inside the
-`.wgt`, the staged `appinfo.json` version matching the `.ipk`, and `apksigner` plus
+The workflow verifies each package before publishing: the author and package signatures at the
+`.wgt`'s root, the staged `appinfo.json` version matching the `.ipk`, and `apksigner` plus
 `versionName`/`versionCode` checked against the single source for the `.apk`. A push with no bump
 builds nothing; a version whose tag already exists is never rebuilt. Because `0.4.0` predates the
 workflow, it can be published through a manual `workflow_dispatch` run.
