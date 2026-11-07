@@ -4,9 +4,9 @@
 
 **Your Arc Player library, on the television.**
 
-A web app for Samsung (Tizen) and LG (webOS) televisions that streams films straight off your phone
-over the LAN — no cloud, no relay, no account. The phone is a headless HTTP server; the TV does the
-decoding.
+Three clients for one phone: a web app for Samsung (Tizen) and LG (webOS) televisions, and a native
+Compose app for Android TV. All of them stream films straight off your phone over the LAN — no
+cloud, no relay, no account. The phone is a headless HTTP server; the TV does the decoding.
 
 ![The library: a featured hero over a poster rail, focused card wearing its ring](docs/ui/library.png)
 
@@ -22,13 +22,15 @@ sofa. ArcTV is the third option: the phone answers HTTP on the living-room Wi-Fi
 to it directly. Nothing leaves the network, and the bytes go to the decoder without a transcode
 step in between.
 
-Two halves, one contract — and the TV half packages for two panels:
+Two halves, one contract — and the TV half ships for three platforms, two of them from one source
+tree:
 
 | Half | What it is | Where it lives |
 |---|---|---|
 | **TV app** | ES5, no framework, ~50 KB — the whole interface, both panels read it | this repository, `tizen/` |
 | **Samsung package** | Tizen 6.0 web app: `.wgt`, signed by the Tizen CLI | `tizen/` as it stands |
 | **LG package** | webOS app: `.ipk`, assembled from the same files by `webos/package.cjs` | `webos/` |
+| **Android TV app** | Kotlin and Compose, no WebView — the same interface and the same key engine, ported | `android-tv/` |
 | **Phone** | LAN HTTP server inside Arc Player, backed by TDLib | [Arc Player](https://github.com/aesw0x/arcplayer) |
 
 The panels agree on almost everything, so `js/platform.js` is the only file that knows there is more
@@ -36,6 +38,11 @@ than one television. It answers two questions — *is this key Back* (Tizen send
 461) and *must I register my media keys* (Tizen does, webOS delivers them unprompted) — and picks the
 player backend the way the app always has: `webapis.avplay` if it exists, otherwise `<video>`, which
 is what webOS offers. See [`docs/WEBOS.md`](docs/WEBOS.md).
+
+A Shield or a Google TV set runs neither package, so `android-tv/` rebuilds the same screens on the
+platform's own focus engine and media stack. It is a port of the web shell rather than a copy of it:
+the wording, the palette and the geometry carry over at **half the CSS pixels**, and where the two
+disagree the web shell is right. See [`docs/ANDROIDTV.md`](docs/ANDROIDTV.md).
 
 ## How it works
 
@@ -207,16 +214,24 @@ tizen/                 the TV app — the authoritative source for both panels
 webos/                 the LG half: a manifest and an assembler, no sources
   appinfo.json         the webOS manifest (version stamped at build time)
   package.cjs          stages tizen/ and runs ares-package
+android-tv/            the native Android TV client — same screens, same keys, Kotlin and Compose
+  app/src/main/java/com/aeswox/arcplayer/tv/
+    arc/               protocol v2 on the wire: client, models, resume, device store
+    ui/                pairing, shelf, title page, player, and the media3 engine behind it
+    ui/components/     the shell's glyphs, focus ring, staggered arrival and shared pills
+    ui/theme/          the shell's palette and type scale, at half its CSS pixels
 tools/
   mock-server/         protocol-complete fake phone
   static.js            serves tizen/ over http
   telemetry-server.js  collects what perf.js reports
+  icon/                the launcher art: SVG sources, rasterised to PNG by headless Chrome
 docs/
   PROTOCOL.md          the wire contract — read this first
   IMPLEMENTATION_PLAN.md
   PHONE-SIDE.md        how the server on the phone is built
   M1-VALIDATION.md     curl + VLC checks for it
   WEBOS.md             what differs on LG, and how to build and install it
+  ANDROIDTV.md         the native client: the port rules, the emulator rig, how to measure it
   ui/                  screenshots
 ```
 
@@ -238,6 +253,10 @@ docs/
 - [ ] LG: track selection and containers. AVPlay has no webOS equivalent, so on an LG the `<video>`
       element chooses the audio, reports no tracks to the sheets, and decides for itself whether an
       `.mkv` plays — the last question this machine cannot answer
+- [x] Android TV: a native Compose client in `android-tv/` — pairing, shelf, title page and player,
+      each walked on the emulator against the mock phone. No physical set has run it yet
+- [ ] Both TV clients: shelf captions. `/api/subtitles/{id}` is served by the phone and called by
+      neither the web shell nor the Kotlin app, so both offer embedded tracks only
 
 ## Licence
 
