@@ -92,7 +92,9 @@ jobs:
           done
           STUDIO="$HOME/tizen-studio"
           INSTALLER=/tmp/web-cli.bin
-          URL_PATH="sdk/Installer/tizen-studio_6.1/web-cli_Tizen_Studio_6.1_ubuntu-64.bin"
+          # 5.1, not the newest: the 6.1 web-cli ships a build-web whose Java classpath is missing
+          # org.eclipse.core.runtime, so it dies with NoClassDefFoundError before compiling anything.
+          URL_PATH="sdk/Installer/tizen-studio_5.1/web-cli_Tizen_Studio_5.1_ubuntu-64.bin"
           wget -q "https://download.tizen.org/$URL_PATH" -O "$INSTALLER" \
             || wget -q "http://download.tizen.org/$URL_PATH" -O "$INSTALLER"
           chmod +x "$INSTALLER"
