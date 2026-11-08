@@ -50,7 +50,7 @@
         container.appendChild(dots);
         container.appendChild(list);
 
-        function showDevices(found) {
+        function showDevices(found, wider) {
             UI.clear(list);
             dots.classList.add('hidden');
 
@@ -61,7 +61,9 @@
                 var retry = UI.el('button', 'button', 'Search again');
                 retry.addEventListener('click', function () { scan(); });
                 list.appendChild(UI.arrive(retry, 0));
-                Focus.set([{ el: retry, onSelect: scan }], { columns: 1 });
+                // `Focus.activate` hands the item to `onSelect`, so a bare `scan` would read it as
+                // the flag and turn a plain retry into a full sweep. Bind the call, not the name.
+                Focus.set([{ el: retry, onSelect: function () { scan(); } }], { columns: 1 });
                 return;
             }
 
@@ -89,6 +91,17 @@
                 list.appendChild(UI.arrive(row, index, { each: 55 }));
                 items.push({ el: row, device: device, onSelect: function () { choose(device); } });
             });
+
+            // The shortcut that gets a returning viewer onto their phone fastest is also the one
+            // that can hide a second phone: a saved address that still answers ends the search
+            // before the network is swept. So when the list came from that shortcut, offer the
+            // wider look.
+            if (wider) {
+                var more = UI.el('button', 'button device-more', 'Look for other phones');
+                more.addEventListener('click', function () { scan(true); });
+                list.appendChild(UI.arrive(more, found.length, { each: 55 }));
+                items.push({ el: more, onSelect: function () { scan(true); } });
+            }
 
             Focus.set(items, { columns: 1 });
         }
@@ -158,7 +171,7 @@
             }
         }
 
-        function scan() {
+        function scan(all) {
             stop();
             title.textContent = 'Choose your phone';
             subtitle.textContent = 'Scanning your Wi-Fi for Arc Player…';
@@ -166,8 +179,9 @@
             UI.clear(list);
             Focus.reset();
 
-            ArcTV.discover(null, { skipSaved: screenOptions.scanAll }).then(function (found) {
-                showDevices(found);
+            var full = !!(all || screenOptions.scanAll);
+            ArcTV.discover(null, { skipSaved: full }).then(function (found) {
+                showDevices(found, !full);
             });
         }
 

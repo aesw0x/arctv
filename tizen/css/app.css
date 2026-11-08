@@ -640,6 +640,21 @@ body {
     transform: scale(1.05);
 }
 
+/*
+ * The wider look lives under the device rows. It stays narrow on purpose: a focus fill that
+ * transitions across an 880px band re-rasters the whole screen, and that is the one cost this
+ * panel never forgives. So it keeps the button's inline width and only its voice is quieter.
+ */
+.button.device-more {
+    margin-top: 10px;
+    padding: 16px 42px;
+    font-size: 24px;
+    font-weight: 500;
+    color: var(--muted);
+    background: transparent;
+    border: 2px solid var(--line);
+}
+
 /* ---------- library ---------- */
 
 /*
